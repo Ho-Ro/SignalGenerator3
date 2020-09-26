@@ -1,0 +1,7 @@
+.bak
+.*~
+*~
+*.orig
+*.new
+*.diff
+*.autosave
