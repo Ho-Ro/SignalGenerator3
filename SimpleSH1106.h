@@ -40,7 +40,7 @@ void initSH1106();
 void DrawBarSH1106(byte bar);
 int DrawImageSH1106(int16_t x, int16_t p, const uint8_t *bitmap);
 int DrawCharSH1106(uint8_t c, byte x, byte page, word Font);
-int DrawStringSH1106(char *s, byte x, byte page, word Font);
+int DrawStringSH1106(const char *s, byte x, byte page, word Font);
 int DrawIntSH1106(long i, byte x, byte page, word Font);
 
 extern bool BoldSH1106;
@@ -191,5 +191,3 @@ const byte imgSmiley[] PROGMEM = {
   1,3,130,132,1,67,130,0,3,128,96,31,130,0,2,1,2,130,4,130,8,133,17,130,8,130,4,2,2,1,130,0};
 
 #endif
-
-

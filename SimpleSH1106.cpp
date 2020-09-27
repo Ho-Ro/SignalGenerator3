@@ -241,7 +241,7 @@ word n, i, j, h, result, b, prevB;
 //   draws a string at x,page
 //   returns width drawn
 //==============================================================
-int DrawStringSH1106(char *s, byte x, byte page, word Font) {
+int DrawStringSH1106(const char *s, byte x, byte page, word Font) {
   int start = x;
   if (page <= 7)
     while (*s) {
