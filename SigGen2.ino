@@ -1,13 +1,15 @@
 //-----------------------------------------------------------------------------
+// Stand Alone Signal Generator
+// Based on this project:
+// https://www.instructables.com/id/Signal-Generator-AD9833/
 // Copyright 2018 Peter Balch
 // subject to the GNU General Public License
 //-----------------------------------------------------------------------------
 
-// #include <SPI.h>
+#include <SPI.h>
 #include <Wire.h>
-#include <limits.h>
-#include "SimpleSH1106.h"
 #include <math.h>
+#include "SimpleSH1106.h"
 
 //-----------------------------------------------------------------------------
 // Defines and Typedefs
@@ -15,10 +17,9 @@
 
 // get register bit - faster: doesn't turn it into 0/1
 #ifndef getBit
-#define getBit( sfr, bit ) ( _SFR_BYTE( sfr ) & _BV( bit ) )
+#define getBit( sfr, bit ) ( _SFR_uint8_t( sfr ) & _BV( bit ) )
 #endif
 
-enum TmenuSel { sTime, sMode, sTrigger, sTestSig, sSigGen };
 
 //-----------------------------------------------------------------------------
 // Global Constants
@@ -41,27 +42,27 @@ const int BtnDown  = 5; // pushbutton
 // globals used in SigGen
 //-----------------------------------------------------------------------------
 
-const byte numberOfDigits = 6; // number of digits (nOD) in the frequense
-byte freqStart[ numberOfDigits ] = { 0, 0, 1, 0, 0, 0 }; // 1000Hz SelPos = 0..nOD-1
-byte freqStop[ numberOfDigits ]  = { 0, 2, 0, 0, 0, 0 }; // 20kHz  SelPos = nOD..2*nOD-1
-byte SelPos = 0; // MSB freqStart
-const byte WvFormPos  = 2 * numberOfDigits;
-const byte SweepPos   = 2 * numberOfDigits + 1;
+const uint8_t digits = 6; // number of digits ( nOD ) in the frequency display
+uint8_t freqStart[ digits ] = { 0, 0, 1, 0, 0, 0 }; // 1000Hz cursor = 0..digits-1
+uint8_t freqStop[ digits ]  = { 0, 2, 0, 0, 0, 0 }; // 20kHz  cursor = digits..2*digits-1
+uint8_t cursor = 0; // MSB freqStart
+const uint8_t WvFormPos  = 2 * digits;
+const uint8_t SweepPos   = 2 * digits + 1;
 
 const int wReset     = 0b0000000100000000;
 const int wSine      = 0b0000000000000000;
 const int wTriangle  = 0b0000000000000010;
 const int wRectangle = 0b0000000000101000;
 
-enum TsweepType { swOff, sw1Sec, sw3Sec, sw10Sec, sw30Sec };
+
+enum sweep_t { swOff, sw1Sec, sw3Sec, sw10Sec, sw30Sec };
+sweep_t sweep = swOff;
+
 
 int waveType = wSine;
-TsweepType sweepType = swOff;
 
 // connections to AD9833
-const int SG_fsyncPin = 10;
-const int SG_CLK = 13;  // SCK
-const int SG_DATA = 11; // MOSI
+const int AD_FSYNC = 10;
 
 int SG_iSweep, SG_nSweep;
 
@@ -70,50 +71,69 @@ int SG_iSweep, SG_nSweep;
 // images for main menu
 //-----------------------------------------------------------------------------
 
-const byte imgMainMenuMid[] PROGMEM = {
+const uint8_t imgMainMenuMid[] PROGMEM = {
   128, // width
-  1, // pages
-  1, 255, 254, 0, 1, 255
+  1,   // pages
+  1, 255, 254, 0, 1, 255,
 };
-const byte imgMainMenuBot[] PROGMEM = {
+const uint8_t imgMainMenuBot[] PROGMEM = {
   128, // width
-  1, // pages
-  1, 255, 254, 128, 1, 255
+  1,   // pages
+  1, 255, 254, 128, 1, 255,
 };
-const byte imgBoxTop[] PROGMEM = {
+const uint8_t imgBoxTop[] PROGMEM = {
   128, // width
-  1, // pages
-  1, 248, 254, 8, 1, 248
+  1,   // pages
+  1, 248, 254, 8, 1, 248,
 };
 
-const byte imgCaret1[] PROGMEM = {
+const uint8_t imgCurRt[] PROGMEM = {
   4, // width
   1, // pages
-  4, 255, 126, 60, 24
+  4, // uint8_ts
+  0xFF, 0x7E, 0x3C, 0x18,
 };
 
-const byte imgCaret2[] PROGMEM = {
+const uint8_t imgCurUp[] PROGMEM = {
   7, // width
   1, // pages
-  7, 32, 48, 56, 60, 56, 48, 32
+  7, // uint8_ts
+  0x20, 0x30, 0x38, 0x3C, 0x38, 0x30, 0x20,
+}; 
+
+const uint8_t imgTria[] PROGMEM = {
+  14, // width
+  2,  // pages
+  28, // uint8_ts
+  0xC0, 0x30, 0x0C, 0x03, 0x03, 0x0C, 0x30, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x83, 0x8C, 0xB0, 0xB0, 0x8C, 0x83,
 };
 
-const byte imgTrian[] PROGMEM = {
+const uint8_t imgSine[] PROGMEM = {
   14, // width
-  2, // pages
-  28, 3, 12, 48, 192, 0, 0, 0, 0, 0, 0, 192, 48, 12, 3, 128, 128, 128, 128, 131, 140, 176, 176, 140, 131, 128, 128, 128, 128
+  2,  // pages
+  28, // uint8_ts
+  0xE0, 0x1C, 0x02, 0x01, 0x01, 0x02, 0x1C, 0xE0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81, 0x8E, 0x90, 0xA0, 0xA0, 0x90, 0x8F
 };
 
-const byte imgSine[] PROGMEM = {
+const uint8_t imgRect[] PROGMEM = {
   14, // width
-  2, // pages
-  28, 1, 2, 28, 224, 0, 0, 0, 0, 0, 0, 224, 28, 2, 1, 128, 128, 128, 129, 142, 144, 160, 160, 144, 142, 129, 128, 128, 128
+  2,  // pages
+  28, // uint8_ts
+  0x00, 0x00, 0x00, 0xFF, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 
+  0xA0, 0xA0, 0xA0, 0xBF, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xBF, 0xA0, 0xA0, 0xA0, 
 };
 
-const byte imgRect[] PROGMEM = {
-  14, // width
-  2, // pages
-  28, 0, 0, 0, 255, 1, 1, 1, 1, 1, 1, 255, 0, 0, 0, 160, 160, 160, 191, 128, 128, 128, 128, 128, 128, 191, 160, 160, 160
+
+const uint8_t imgHz[] PROGMEM = {
+  20, // width
+  2,  // pages
+  40, // uint8_ts
+  0xFE, 0xFE, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xFE, 0xFE, 
+  0x00, 0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  
+  0xFF, 0xFF, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xFF, 0xFF,
+  0x00, 0x00, 0xC1, 0xE1, 0xF1, 0xD9, 0xCD, 0xC7, 0xC3, 0xC1, 
 };
 
 
@@ -122,13 +142,12 @@ const byte imgRect[] PROGMEM = {
 //   draws a box around the screen with "text" written at top-left
 //-----------------------------------------------------------------------------
 void drawBox( const char* text ) {
-  // clearSH1106();
-  DrawImageSH1106( 0, 0, imgBoxTop );
+  drawImageSH1106( 0, 0, imgBoxTop );
   for ( int y = 1; y < 7; ++y )
-    DrawImageSH1106( 0, y, imgMainMenuMid );
-  DrawImageSH1106( 0, 7, imgMainMenuBot );
-  DrawCharSH1106( ' ',  6, 0, SmallFont );
-  DrawStringSH1106( text,  7, 0, SmallFont );
+    drawImageSH1106( 0, y, imgMainMenuMid );
+  drawImageSH1106( 0, 7, imgMainMenuBot );
+  drawCharSH1106( ' ',  6, 0, smallFont );
+  drawStringSH1106( text,  7, 0, smallFont );
 }
 
 
@@ -157,114 +176,101 @@ void StartTimer1( word overflow ) {
 // drawSigGenMenu
 //-----------------------------------------------------------------------------
 void drawSigGenMenu( void ) {
-  byte x, y, i;
+  uint8_t x, y, i;
   drawBox( "Signal Generator" );
 
-  if ( sweepType == swOff ) {
+  if ( sweep == swOff ) {
     x = 20;
-    y = 3;
-    for ( i = 0; i < numberOfDigits; ++i ) {
-      if ( i == SelPos )
-        DrawImageSH1106( x + 2, y + 2, imgCaret2 );
-      x += DrawIntSH1106( freqStart[ i ], x, y, LargeDigitsFont );
+    y = 2;
+    for ( i = 0; i < digits; ++i ) {
+      if ( i == cursor )
+        drawImageSH1106( x + 2, y + 2, imgCurUp );
+      x += drawIntSH1106( freqStart[ i ], x, y, LargeDigitsFont );
     }
+    drawImageSH1106( x + 6, y, imgHz );
   } else {
     x = 60;
     y = 2;
-    DrawStringSH1106( "Start Freq:", 12, y, SmallFont );
-    for ( i = 0; i < numberOfDigits; ++i ) {
-      if ( i == SelPos )
-        DrawImageSH1106( x - 2, y + 1, imgCaret2 );
-      x += DrawIntSH1106( freqStart[ i ], x, y, SmallFont );
+    drawStringSH1106( "Start Freq:", 12, y, smallFont );
+    for ( i = 0; i < digits; ++i ) {
+      if ( i == cursor )
+        drawImageSH1106( x - 2, y + 1, imgCurUp );
+      x += drawIntSH1106( freqStart[ i ], x, y, smallFont );
     }
-    DrawStringSH1106( " Hz",  x, y, SmallFont );
+    drawStringSH1106( " Hz",  x, y, smallFont );
 
     x = 60;
     y = 4;
-    DrawStringSH1106( "Stop Freq:", 12, y, SmallFont );
-    for ( i = 0; i < numberOfDigits; ++i ) {
-      if ( i == SelPos - numberOfDigits )
-        DrawImageSH1106( x - 2, y + 1, imgCaret2 );
-      x += DrawIntSH1106( freqStop[ i ], x, y, SmallFont );
+    drawStringSH1106( "Stop Freq:", 12, y, smallFont );
+    for ( i = 0; i < digits; ++i ) {
+      if ( i == cursor - digits )
+        drawImageSH1106( x - 2, y + 1, imgCurUp );
+      x += drawIntSH1106( freqStop[ i ], x, y, smallFont );
     }
-    DrawStringSH1106( " Hz",  x, y, SmallFont );
+    drawStringSH1106( " Hz",  x, y, smallFont );
   }
 
   x = 14;
   y = 6;
-  if ( SelPos == WvFormPos )
-    DrawImageSH1106( x - 6, y, imgCaret1 );
-  //  switch (waveType) {
-  //    case wSine:      DrawStringSH1106("Sine",     x, y, SmallFont); break;
-  //    case wTriangle:  DrawStringSH1106("Triangle", x, y, SmallFont); break;
-  //    case wRectangle:    DrawStringSH1106("Rectangle",   x, y, SmallFont); break;
+  if ( cursor == WvFormPos )
+    drawImageSH1106( x - 6, y, imgCurRt );
+  //  switch ( waveType ) {
+  //    case wSine:      drawStringSH1106( "Sine",     x, y, smallFont ); break;
+  //    case wTriangle:  drawStringSH1106( "Triangle", x, y, smallFont ); break;
+  //    case wRectangle:    drawStringSH1106( "Rectangle",   x, y, smallFont ); break;
   //  }
   for ( x = 14; x < 42; x += 14 )
     switch ( waveType ) {
-      case wReset:     if ( 14 == x ) DrawStringSH1106( "OFF", 20, y, SmallFont ); break;
-      case wSine:      DrawImageSH1106( x, y, imgSine ); break;
-      case wTriangle:  DrawImageSH1106( x, y, imgTrian ); break;
-      case wRectangle: DrawImageSH1106( x, y, imgRect ); break;
+      case wReset:     if ( 14 == x ) drawStringSH1106( "OFF", 20, y, smallFont ); break;
+      case wSine:      drawImageSH1106( x, y, imgSine ); break;
+      case wTriangle:  drawImageSH1106( x, y, imgTria ); break;
+      case wRectangle: drawImageSH1106( x, y, imgRect ); break;
     }
 
   x = 54;
   y = 6;
-  switch ( sweepType ) {
-    case swOff:       DrawStringSH1106( "Constant",     x, y, SmallFont ); break;
-    case sw1Sec:      DrawStringSH1106( "Sweep 1 Sec",  x, y, SmallFont ); break;
-    case sw3Sec:      DrawStringSH1106( "Sweep 3 Sec",  x, y, SmallFont ); break;
-    case sw10Sec:     DrawStringSH1106( "Sweep 10 Sec", x, y, SmallFont ); break;
-    case sw30Sec:     DrawStringSH1106( "Sweep 30 Sec", x, y, SmallFont ); break;
+  switch ( sweep ) {
+    case swOff:       drawStringSH1106( "Constant",     x, y, smallFont ); break;
+    case sw1Sec:      drawStringSH1106( "Sweep 1 Sec",  x, y, smallFont ); break;
+    case sw3Sec:      drawStringSH1106( "Sweep 3 Sec",  x, y, smallFont ); break;
+    case sw10Sec:     drawStringSH1106( "Sweep 10 Sec", x, y, smallFont ); break;
+    case sw30Sec:     drawStringSH1106( "Sweep 30 Sec", x, y, smallFont ); break;
   }
-  if ( SelPos == SweepPos )
-    DrawImageSH1106( x - 6, y, imgCaret1 );
+  if ( cursor == SweepPos )
+    drawImageSH1106( x - 6, y, imgCurRt );
 }
 
 
 //-----------------------------------------------------------------------------
 //calculate the frequency from the array.
 //-----------------------------------------------------------------------------
-unsigned long calcFreq( byte* freqSG ) {
+unsigned long calcFreq( uint8_t* freqSG ) {
   unsigned long f = 0;
-  unsigned long z = 1;
-  for ( byte x = numberOfDigits - 1; x < numberOfDigits; --x ) {
-    f = f + freqSG[ x ] * z;
-    z *= 10;
+  for ( uint8_t x = 0; x < digits; ++x ) {
+    f *= 10;
+    f += freqSG[ x ];
   }
   return f;
 }
 
 
 //-----------------------------------------------------------------------------
-// SG_WriteRegister (bit bang)
+// SG_WriteRegister ( SPI )
 //-----------------------------------------------------------------------------
 void SG_WriteRegister( word dat ) {
-  digitalWrite( SG_CLK, LOW );
-  digitalWrite( SG_CLK, HIGH );
-
-  digitalWrite( SG_fsyncPin, LOW );
-  for ( byte i = 0; i < 16; i++ ) {
-    if ( dat & 0x8000 )
-      digitalWrite( SG_DATA, HIGH );
-    else
-      digitalWrite( SG_DATA, LOW );
-    dat = dat << 1;
-    digitalWrite( SG_CLK, HIGH );
-    digitalWrite( SG_CLK, LOW );
-  }
-  digitalWrite( SG_CLK, HIGH );
-  digitalWrite( SG_fsyncPin, HIGH );
+  digitalWrite( AD_FSYNC, LOW );
+  SPI.transfer16( dat );
+  digitalWrite( AD_FSYNC, HIGH );
 }
 
 
 //-----------------------------------------------------------------------------
 // SG_Reset
 //-----------------------------------------------------------------------------
-void SG_Reset() {
+void SG_Reset () {
   delay( 100 );
   SG_WriteRegister( wReset );
-  sweepType = swOff;
-  // waveType = wReset;
+  sweep = swOff;
   delay( 100 );
 }
 
@@ -275,7 +281,7 @@ void SG_Reset() {
 //-----------------------------------------------------------------------------
 void SG_freqReset( long frequency, int wave ) {
   long fl = frequency * ( 0x10000000L / 25000000.0 );
-  SG_WriteRegister(0x2100 );
+  SG_WriteRegister( 0x2100 );
   SG_WriteRegister( uint16_t( fl & 0x3FFFL ) | 0x4000 );
   SG_WriteRegister( uint16_t( ( fl & 0xFFFC000L ) >> 14 ) | 0x4000 );
   SG_WriteRegister( 0xC000 );
@@ -308,6 +314,7 @@ void SG_StepSweep( void ) {
 }
 
 
+#if 0
 //-----------------------------------------------------------------------------
 // Sweep
 //   sweeps siggen freq continuously
@@ -320,7 +327,7 @@ void Sweep( int n ) {
   long fstop  = calcFreq( freqStop );
   int i = 0;
 
-  drawSigGenMenu();
+  drawSigGenMenu ();
 
   do {
     long f = exp( ( log( fstop ) - log( fstart ) ) * i / ( n - 1 ) + log( fstart ) ) + 0.5;
@@ -329,10 +336,11 @@ void Sweep( int n ) {
     if ( ++i >= n ) {
       i = 0;
     }
-  } while ( !Serial.available() );
-  sweepType = swOff;
+  } while ( !Serial.available () );
+  sweep = swOff;
   SG_freqSet( calcFreq( freqStart ), waveType );
 }
+#endif
 
 
 //-----------------------------------------------------------------------------
@@ -340,30 +348,30 @@ void Sweep( int n ) {
 //   increment digit for SigGen Menu
 //-----------------------------------------------------------------------------
 void incItem( void ) {
-  if ( SelPos == WvFormPos ) {
+  if ( cursor == WvFormPos ) {
     switch ( waveType ) {
       case wReset:     waveType = wSine; break;
       case wSine:      waveType = wTriangle; break;
       case wTriangle:  waveType = wRectangle; break;
       case wRectangle: waveType = wReset; break;
     }
-  } else if ( SelPos == SweepPos ) {
-    if ( sweepType == sw30Sec )
-      sweepType = swOff;
+  } else if ( cursor == SweepPos ) {
+    if ( sweep == sw30Sec )
+      sweep = swOff;
     else
-      sweepType = sweepType + 1;
-  } else if ( SelPos < numberOfDigits ) {
-    if ( freqStart[ SelPos ] >= 9 )
-      freqStart[ SelPos ] = 0;
+      sweep = sweep_t( sweep + 1 );
+  } else if ( cursor < digits ) {
+    if ( freqStart[ cursor ] >= 9 )
+      freqStart[ cursor ] = 0;
     else
-      freqStart[ SelPos ]++;
-  } else if ( sweepType != swOff ) {
-    if ( freqStop[ SelPos - numberOfDigits ] >= 9)
-      freqStop[ SelPos - numberOfDigits ] = 0;
+      freqStart[ cursor ]++;
+  } else if ( sweep != swOff ) {
+    if ( freqStop[ cursor - digits ] >= 9 )
+      freqStop[ cursor - digits ] = 0;
     else
-      freqStop[ SelPos - numberOfDigits ]++;
+      freqStop[ cursor - digits ]++;
   }
-  drawSigGenMenu();
+  drawSigGenMenu ();
 }
 
 
@@ -372,62 +380,62 @@ void incItem( void ) {
 //   decrement digit for SigGen Menu
 //-----------------------------------------------------------------------------
 void decItem( void ) {
-  if ( SelPos == WvFormPos ) {
+  if ( cursor == WvFormPos ) {
     switch ( waveType ) {
       case wReset:     waveType = wRectangle; break;
       case wRectangle: waveType = wTriangle; break;
       case wTriangle:  waveType = wSine; break;
       case wSine:      waveType = wReset; break;
     }
-  } else if ( SelPos == SweepPos ) { // 1, 3, 10, 30
-    if ( sweepType == swOff )
-      sweepType = sw30Sec;
+  } else if ( cursor == SweepPos ) { // 1, 3, 10, 30
+    if ( sweep == swOff )
+      sweep = sw30Sec;
     else
-      sweepType = sweepType - 1;
-  } else if ( SelPos < numberOfDigits ) {
-    if ( freqStart[ SelPos ] <= 0 )
-      freqStart[ SelPos ] = 9;
+      sweep = sweep_t( sweep - 1 );
+  } else if ( cursor < digits ) {
+    if ( freqStart[ cursor ] <= 0 )
+      freqStart[ cursor ] = 9;
     else
-      freqStart[ SelPos]--;
-  } else if ( sweepType != swOff ) {
-    if ( freqStop[SelPos - numberOfDigits ] <= 0)
-      freqStop[ SelPos - numberOfDigits ] = 9;
+      freqStart[ cursor]--;
+  } else if ( sweep != swOff ) {
+    if ( freqStop[cursor - digits ] <= 0 )
+      freqStop[ cursor - digits ] = 9;
     else
-      freqStop[ SelPos - numberOfDigits ]--;
+      freqStop[ cursor - digits ]--;
   }
-  drawSigGenMenu();
+  drawSigGenMenu ();
 }
 
 
 //-----------------------------------------------------------------------------
-// caretRight
+// cursorRight
 //   increment caret position for SigGen Menu
 //-----------------------------------------------------------------------------
-void caretRight( void ) {
-  if ( SelPos == SweepPos )
-    SelPos = 0;
+void cursorRight( void ) {
+  if ( cursor == SweepPos )
+    cursor = 0;
   else
-    ++SelPos;
+    ++cursor;
   // skip over the stop frequency display if no sweep
-  if ( ( SelPos >= numberOfDigits ) && ( SelPos < 2 * numberOfDigits ) && ( sweepType == swOff ) )
-    SelPos = WvFormPos;
-  drawSigGenMenu();
+  if ( ( cursor >= digits ) && ( cursor < 2 * digits ) && ( sweep == swOff ) )
+    cursor = WvFormPos;
+  drawSigGenMenu ();
 }
 
 
 //-----------------------------------------------------------------------------
-// caretLeft
+// cursorLeft
 //   decrement caret position for SigGen Menu
 //-----------------------------------------------------------------------------
-void caretLeft( void ) {
-  if ( SelPos == 0 )
-    SelPos = SweepPos;
+void cursorLeft( void ) {
+  if ( cursor == 0 )
+    cursor = SweepPos;
   else
-    --SelPos;
+    --cursor;
   // skip over the stop frequency display if no sweep
-  if ( ( SelPos >= numberOfDigits ) && ( SelPos < 2 * numberOfDigits ) && ( sweepType == swOff ) )
-    SelPos = numberOfDigits - 1;
-  drawSigGenMenu();
+  if ( ( cursor >= digits ) && ( cursor < 2 * digits ) && ( sweep == swOff ) )
+    cursor = digits - 1;
+  drawSigGenMenu ();
 }
 
 
@@ -443,22 +451,22 @@ void ExecSigGenMenu( void ) {
   static int prevUp    = 0;
   static int prevDown  = 0;
   int i;
-  const byte timeout = 0xC0; // 3 sec to exit
+  const uint8_t timeout = 0xC0; // 3 sec to exit
 
-  drawSigGenMenu();
+  drawSigGenMenu ();
 
-  StartTimer1(0);
+  StartTimer1( 0 );
   SG_iSweep = 0;
 
   do {
-    SerialCommand();
+    SerialCommand ();
 
     i = digitalRead( BtnUp );
     if ( i != prevUp ) {
       prevUp = i;
       if ( i == LOW ) {
-        incItem();
-        drawSigGenMenu();
+        incItem ();
+        drawSigGenMenu ();
         SG_freqReset( calcFreq( freqStart ), waveType );
       }
       myDelay( 100 );
@@ -469,8 +477,8 @@ void ExecSigGenMenu( void ) {
     if ( i != prevDown ) {
       prevDown = i;
       if ( i == LOW ) {
-        decItem();
-        drawSigGenMenu();
+        decItem ();
+        drawSigGenMenu ();
         SG_freqReset( calcFreq( freqStart ), waveType );
       }
       myDelay( 100 );
@@ -481,8 +489,8 @@ void ExecSigGenMenu( void ) {
     if ( i != prevLeft ) {
       prevLeft = i;
       if ( i == LOW ) {
-        caretLeft();
-        drawSigGenMenu();
+        cursorLeft ();
+        drawSigGenMenu ();
       }
       myDelay( 100 );
       StartTimer1( 0 );
@@ -492,21 +500,21 @@ void ExecSigGenMenu( void ) {
     if ( i != prevRight ) {
       prevRight = i;
       if ( i == LOW ) {
-        caretRight();
-        drawSigGenMenu();
+        cursorRight ();
+        drawSigGenMenu ();
       }
       myDelay( 100 );
       StartTimer1( 0 );
     }
 
-    if ( sweepType != swOff ) {
-      switch ( sweepType ) {
+    if ( sweep != swOff ) {
+      switch ( sweep ) {
         case sw1Sec:  SG_nSweep =  1000L * 65 / 100; break;
         case sw3Sec:  SG_nSweep =  3000L * 65 / 100; break;
         case sw10Sec: SG_nSweep = 10000L * 65 / 100; break;
         case sw30Sec: SG_nSweep = 30000L * 65 / 100; break;
       }
-      SG_StepSweep();
+      SG_StepSweep ();
     }
 
     i = TCNT1L; // to force read of TCNT1H
@@ -528,36 +536,77 @@ void myDelay( int mS ) {
 
 //-----------------------------------------------------------------------------
 // SerialCommand
-//   if a byte is available in teh seril input buffer
+//   if a uint8_t is available in the serial input buffer
 //   execute it as a command
 //-----------------------------------------------------------------------------
 void SerialCommand( void ) {
-  static bool newNumber = true;
-  if ( Serial.available() > 0 ) {
-    char c = Serial.read();
-
+  static bool numeric = false; // input of argument
+  static bool kiloMod = false; // true if char 'k' was input
+  if ( Serial.available () > 0 ) {
+    char c = Serial.read ();
     if ( ( c >= '0' ) && ( c <= '9' ) ) {
-      for ( int i = 0; i < numberOfDigits - 1 ; ++i )
-        freqStart[ i ] = newNumber ? 0 : freqStart[ i + 1 ];
-      freqStart[ numberOfDigits - 1 ] = c - '0';
-      newNumber = false;
-    } else {
-      newNumber = true;
-      switch (c) {
-        case 'C': sweepType = swOff; break;
-        case 'S': waveType = wSine; SG_freqReset(calcFreq(freqStart), waveType); break;   // SigGen wave is sine
-        case 'T': waveType = wTriangle; SG_freqReset(calcFreq(freqStart), waveType); break;   // SigGen wave is triangle
-        case 'R': waveType = wRectangle; SG_freqReset(calcFreq(freqStart), waveType); break;   // SigGen wave is rectangle
-        case 'O': SG_Reset(); waveType = wReset; break;   // SigGen off
-        case 'X': for ( int i = 0; i < numberOfDigits ; i++ ) freqStop[i] = freqStart[i]; break; // xfer freq to stop array
-        case 'G': sweepType = sw1Sec; Sweep(1000);  break; // sweep SigGen
-        case 'H': sweepType = sw3Sec; Sweep(3000);  break; // sweep SigGen
-        case 'I': sweepType = sw10Sec; Sweep(10000);  break; // sweep SigGen
-        case 'J': sweepType = sw30Sec; Sweep(30000);  break; // sweep SigGen
-        default: return;
+      for ( int i = 0; i < digits - 1 ; ++i )
+        freqStart[ i ] = numeric ? freqStart[ i + 1 ] : 0; // clear all or shift left
+      freqStart[ digits - 1 ] = c - '0'; // add new digit at the right
+      numeric = true; // we are in argument input mode
+      kiloMod = false;
+    } else { // all non numeric char stop number input
+      numeric = false; // no more digits
+      switch ( c ) {
+        case 'k': // multiply by 1000
+          if ( !kiloMod ) { // apply only once
+            for ( int i = 0 ; i < digits - 3 ; i++ ) {
+              freqStart[ i ] = freqStart[ i + 3 ]; // value << 3 digits
+              freqStart[ i + 3 ] = 0; // clear last 3 digits
+            }
+            kiloMod = true;
+          }
+          break;
+        case 'S':
+          waveType = wSine;
+          SG_freqReset( calcFreq( freqStart ), waveType );
+          break;
+        case 'T':
+          waveType = wTriangle;
+          SG_freqReset( calcFreq( freqStart ), waveType );
+          break;
+        case 'R':
+          waveType = wRectangle;
+          SG_freqReset( calcFreq( freqStart ), waveType );
+          break;
+        case 'O':
+          SG_Reset ();
+          waveType = wReset;
+          break;
+        case 'X': // exchange start and stop array
+          uint8_t x;
+          for ( int i = 0; i < digits ; i++ ) {
+            x = freqStop[ i ];
+            freqStop[ i ] = freqStart[ i ];
+            freqStart[ i ] = x;
+          }
+          break;
+        case 'C':
+          sweep = swOff;
+          SG_freqReset( calcFreq( freqStart ), waveType );
+          break;
+        case 'G':
+          sweep = sw1Sec;
+          break;
+        case 'H':
+          sweep = sw3Sec;
+          break;
+        case 'I':
+          sweep = sw10Sec;
+          break;
+        case 'J':
+          sweep = sw30Sec;
+          break;
+        default:
+          return;
       }
-      drawSigGenMenu();
     }
+    drawSigGenMenu ();
   }
 }
 
@@ -566,12 +615,12 @@ void SerialCommand( void ) {
 // InitSigGen
 //-----------------------------------------------------------------------------
 void InitSigGen( void ) {
-  pinMode( SG_DATA, OUTPUT );
-  digitalWrite( SG_CLK, HIGH );
-  pinMode( SG_CLK, OUTPUT );
-  digitalWrite( SG_fsyncPin, HIGH );
-  pinMode( SG_fsyncPin, OUTPUT );
-  SG_Reset();
+  digitalWrite( AD_FSYNC, HIGH );
+  pinMode( AD_FSYNC, OUTPUT );
+  SPI.begin ();
+  SPI.beginTransaction( SPISettings( 4000000, MSBFIRST, SPI_MODE3 ) );
+
+  SG_Reset ();
   SG_freqReset( calcFreq( freqStart ), waveType );
 }
 
@@ -585,32 +634,22 @@ void setup( void ) {
   Serial.begin( BAUDRATE );
 
   // Activate interrupts
-  sei();
+  sei ();
 
-  Serial.println( F("SigGen2 " __DATE__ ) ); // compilation date
-  Serial.println( F("OK") );
+  Serial.println( F( "SigGen2 " __DATE__ ) ); // compilation date
+  Serial.println( F( "OK" ) );
 
   pinMode( BtnLeft,  INPUT_PULLUP );
   pinMode( BtnRight, INPUT_PULLUP );
   pinMode( BtnUp,    INPUT_PULLUP );
   pinMode( BtnDown,  INPUT_PULLUP );
 
-  Wire.begin(); // join i2c bus as master
-  //  TWBR = 1; // freq=888kHz period=1.125uS
-  //  TWBR = 2; // freq=800kHz period=1.250uS
-  //  TWBR = 3; // freq=727kHz period=1.375uS
-  //  TWBR = 4; // freq=666kHz period=1.500uS
+  Wire.begin (); // join i2c bus as master
   TWBR = 5; // freq=615kHz period=1.625uS
-  //  TWBR = 10; // freq=444kHz period=2.250uS
-  //  TWBR = 20; // freq=285kHz period=3.500uS
-  //  TWBR = 30; // freq=210kHz period=4.750uS
-  //  TWBR = 40; // freq=166kHz period=6.000uS
-  //  TWBR = 50; // freq=137kHz period=7.250uS
 
-  initSH1106();
+  initSH1106 ();
 
-  InitSigGen();
-
+  InitSigGen ();
 }
 
 
@@ -618,6 +657,91 @@ void setup( void ) {
 // Main routines
 // loop
 //-----------------------------------------------------------------------------
-void loop (void) {
-  ExecSigGenMenu();
+void loop ( void ) {
+  ExecSigGenMenu ();
 }
+
+
+/******************************************************************************
+  AD9833 register ( 16 bit )
+  D15 D14   00: CONTROL ( 14 bits )
+          01: FREQ0   ( 14 bits )
+          10: FREQ1   ( 14 bits )
+          11: PHASE   ( 12 bits ) ( D13 D12 0X: PHASE0, 1X: PHASE1 )
+
+  CONTROL bits:
+
+  D13: B28
+  Two write operations are required to load a complete word into either of the frequency registers.
+  B28 = 1 allows a complete word to be loaded into a frequency register in two consecutive writes.
+  The first write contains the 14 LSBs of the frequency word, and the next write contains the 14 MSBs.
+  The first two bits of each 16-bit word define the frequency register to which the word is loaded,
+  and should therefore be the same for both of the consecutive writes.
+  See Table 8 for the appropriate addresses.
+  The write to the frequency register occurs after both words have been loaded; therefore, the register
+  never holds an intermediate value. An example of a complete 28-bit write is shown in Table 9.
+  When B28 = 0, the 28-bit frequency register operates as two 14-bit registers, one containing
+  the 14 MSBs and the other containing the 14 LSBs. This means that the 14 MSBs of the frequency word
+  can be altered independent of the 14 LSBs, and vice versa. To alter the 14 MSBs or the 14 LSBs,
+  a single write is made to the appropriate frequency address. The control bit D12 ( HLB ) informs
+  the AD9833 whether the bits to be altered are the 14 MSBs or 14 LSBs.
+
+  D12: HLB
+  This control bit allows the user to continuously load the MSBs or LSBs of a frequency register while
+  ignoring the remaining 14 bits. This is useful if the complete 28-bit resolution is not required.
+  HLB is used in conjunction with D13 ( B28 ). This control bit indicates whether the 14 bits being
+  loaded are being transferred to the 14 MSBs or 14 LSBs of the addressed frequency register.
+  D13 ( B28 ) must be set to 0 to be able to change the MSBs and LSBs of a frequency word separately.
+  When D13 ( B28 ) = 1, this control bit is ignored. HLB = 1 allows a write to the 14 MSBs of the addressed
+  frequency register. HLB = 0 allows a write to the 14 LSBs of the addressed frequency register.
+
+  D11: FSELECT
+  The FSELECT bit defines whether the FREQ0 register or the FREQ1 register is used in the phase accumulator.
+
+  D10: PSELECT
+  The PSELECT bit defines whether the PHASE0 register or the PHASE1 register data is added to the output
+  of the phase accumulator.
+
+  D9: Reserved
+  This bit should be set to 0.
+
+  D8: Reset
+  Reset = 1 resets internal registers to 0, which corresponds to an analog output of midscale.
+  Reset = 0 disables reset.
+
+  D7: SLEEP1
+  When SLEEP1 = 1, the internal MCLK clock is disabled, and the DAC output remains at its present value
+  because the NCO is no longer accumulating. When SLEEP1 = 0, MCLK is enabled.
+
+  D6: SLEEP12
+  SLEEP12 = 1 powers down the on-chip DAC. This is useful when the AD9833 is used to output the MSB
+  of the DAC data. SLEEP12 = 0 implies that the DAC is active.
+
+  D5: OPBITEN
+  The function of this bit, in association with D1 ( mode ), is to control what is output at the VOUT pin.
+  When OPBITEN = 1, the output of the DAC is no longer available at the VOUT pin. Instead, the MSB
+  ( or MSB/2 ) of the DAC data is connected to the VOUT pin. This is useful as a coarse clock source.
+  The DIV2 bit controls whether it is the MSB or MSB/2 that is output. When OPBITEN = 0, the DAC is
+  connected to VOUT. The mode bit determines whether it is a sinusoidal or a ramp output that is available.
+
+  D4: Reserved
+  This bit must be set to 0.
+
+  D3: DIV2
+  DIV2 is used in association with D5 ( OPBITEN ). When DIV2 = 1, the MSB of the DAC data is passed
+  directly to the VOUT pin. When DIV2 = 0, the MSB/2 of the DAC data is output at the VOUT pin.
+
+  D2: Reserved
+  This bit must be set to 0.
+
+  D1: MODE
+  This bit is used in association with OPBITEN ( D5 ). The function of this bit is to control
+  what is output at the VOUT pin when the on-chip DAC is connected to VOUT. This bit should
+  be set to 0 if the control bit OPBITEN = 1. When MODE = 1, the SIN ROM is bypassed, resulting
+  in a triangle output from the DAC. When MODE = 0, the SIN ROM is used to convert the phase
+  information into amplitude information, which results in a sinusoidal signal at the output.
+
+  D0: Reserved
+  This bit must be set to 0.
+
+*******************************************************************************/

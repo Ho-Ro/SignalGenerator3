@@ -4,10 +4,10 @@
   typical use is:
       #include <Wire.h>
       #include "SimpleSH1106.h"
-      Wire.begin(); // join i2c bus as master
+      Wire.begin (); // join i2c bus as master
       TWBR = 5; // freq=615kHz period=1.625uS
-      initSH1106();
-      DrawImageSH1106(20,1,imgSmiley);
+      initSH1106 ();
+      drawImageSH1106( 20,1,imgSmiley );
 
   typical I2C speed values are:
       TWBR = 1; // freq=888kHz period=1.125uS
@@ -31,21 +31,21 @@
 
 const int addr = 0x3C;
 
-void DrawByteSH1106(byte x, byte page, byte i);
-void setupPageCol(int page, int col);
-void setupCol(int col);
-void setupPage(int page);
-void clearSH1106();
-void initSH1106();
-void DrawBarSH1106(byte bar);
-int DrawImageSH1106(int16_t x, int16_t p, const uint8_t *bitmap);
-int DrawCharSH1106(uint8_t c, byte x, byte page, word Font);
-int DrawStringSH1106(const char *s, byte x, byte page, word Font);
-int DrawIntSH1106(long i, byte x, byte page, word Font);
+void drawByteSH1106( uint8_t x, uint8_t page, uint8_t i );
+void setupPageCol( uint8_t page, uint8_t col );
+void setupCol( uint8_t col );
+void setupPage( uint8_t page );
+void clearSH1106 ();
+void initSH1106 ();
+void drawBarSH1106( uint8_t bar );
+int drawImageSH1106( uint8_t x, uint8_t p, const uint8_t *bitmap );
+int drawCharSH1106( uint8_t c, uint8_t x, uint8_t page, const uint8_t *font );
+int drawStringSH1106( const char *s, uint8_t x, uint8_t page, const uint8_t *font );
+int drawIntSH1106( long i, uint8_t x, uint8_t page, const uint8_t *font );
 
 extern bool BoldSH1106;
 
-const byte SmallFont[] PROGMEM = {
+const uint8_t smallFont[] PROGMEM = {
   ' ', // first char
   1, // height in pages
   4, 0x00,0x00,0x00,0x00,  //
@@ -56,7 +56,7 @@ const byte SmallFont[] PROGMEM = {
   6, 0x46,0x26,0x10,0x08,0x64,0x62,  // %
   5, 0x3A,0x45,0x4A,0x30,0x48,  // &
   1, 0x03,  // '
-  2, 0x7E,0x81,  // (
+  2, 0x7E,0x81,  // ( 
   2, 0x81,0x7E,  // )
   2, 0x03,0x03,  // *
   3, 0x10,0x38,0x10,  // +
@@ -146,7 +146,7 @@ const byte SmallFont[] PROGMEM = {
   1, 0xFE,  // 
   0};
 
-const byte DigitsFont[] PROGMEM = {
+const uint8_t DigitsFont[] PROGMEM = {
   '-', //first char
   1, // height in pages
   4, 0x10,0x10,0x10,0x10,       // -
@@ -164,7 +164,7 @@ const byte DigitsFont[] PROGMEM = {
   4, 0x26,0x49,0x49,0x3E,       // 9
   0}; // end
 
-const byte LargeDigitsFont[] PROGMEM = {
+const uint8_t LargeDigitsFont[] PROGMEM = {
   '+', // first char
   2, // height in pages
   12, 0x00,0x00,0x00,0x00,0x00,0xF0,0xF0,0x00,0x00,0x00,0x00,0x00,0x06,0x06,0x06,0x06,0x06,0xFF,0xFF,0x06,0x06,0x06,0x06,0x06,  // +
@@ -184,7 +184,7 @@ const byte LargeDigitsFont[] PROGMEM = {
   10, 0xF8,0xFC,0x1E,0x0E,0x06,0x06,0x06,0x9C,0xFC,0xF0,0x31,0x73,0xE7,0xC6,0xC6,0xC6,0xE7,0x7B,0x3F,0x1F,  // 9
   0};
 
-const byte imgSmiley[] PROGMEM = {
+const uint8_t imgSmiley[] PROGMEM = {
   21, // width
   3, // pages
   4,0,192,48,8,130,4,130,130,133,1,130,130,130,4,7,8,48,192,0,31,96,128,130,0,1,67,130,132,1,3,131,0,
