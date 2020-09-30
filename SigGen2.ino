@@ -9,6 +9,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <math.h>
+
 #include "SimpleSH1106.h"
 
 //-----------------------------------------------------------------------------
@@ -30,8 +31,6 @@ const long BAUDRATE  = 115200;  // Baud rate of UART in bps
 //-----------------------------------------------------------------------------
 // Global Variables
 //-----------------------------------------------------------------------------
-
-// bool SendingSerial = false;
 
 //-----------------------------------------------------------------------------
 // globals used in SigGen
@@ -73,22 +72,6 @@ uint16_t SG_iSweep, SG_nSweep;
 // images for main menu
 //-----------------------------------------------------------------------------
 
-const uint8_t imgMainMenuMid[] PROGMEM = {
-  128, // width
-  1,   // pages
-  1, 255, 254, 0, 1, 255,
-};
-const uint8_t imgMainMenuBot[] PROGMEM = {
-  128, // width
-  1,   // pages
-  1, 255, 254, 128, 1, 255,
-};
-const uint8_t imgBoxTop[] PROGMEM = {
-  128, // width
-  1,   // pages
-  1, 248, 254, 8, 1, 248,
-};
-
 const uint8_t imgCurRt[] PROGMEM = {
   4, // width
   1, // pages
@@ -128,10 +111,10 @@ const uint8_t imgRect[] PROGMEM = {
 };
 
 #if 0
-const uint8_t imgHz[] PROGMEM = {
+const uint8_t imgHz[] PROGMEM = { // unencoded bars (->43 bytes)
   20, // width
   2,  // pages
-  40, // 
+  40, //
   0xFE, 0xFE, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xFE, 0xFE,
   0x00, 0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
   0xFF, 0xFF, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xFF, 0xFF,
@@ -140,7 +123,7 @@ const uint8_t imgHz[] PROGMEM = {
 
 #else
 
-const uint8_t imgHz[] PROGMEM = { // bars are run length encoded
+const uint8_t imgHz[] PROGMEM = { // run length encoded (RLE) bars (->29 bytes)
   20, // width
   2,  // pages
   128 + 2, 0xFE, // 2x -> 0xFE, 0xFE,
@@ -156,19 +139,6 @@ const uint8_t imgHz[] PROGMEM = { // bars are run length encoded
   0xC1, 0xE1, 0xF1, 0xD9, 0xCD, 0xC7, 0xC3, 0xC1,
 };
 #endif
-
-//-----------------------------------------------------------------------------
-// drawBox
-//   draws a box around the screen with "text" written at top-left
-//-----------------------------------------------------------------------------
-void drawBox( const char* text ) {
-  drawImageSH1106( 0, 0, imgBoxTop );
-  for ( int y = 1; y < 7; ++y )
-    drawImageSH1106( 0, y, imgMainMenuMid );
-  drawImageSH1106( 0, 7, imgMainMenuBot );
-  drawCharSH1106( ' ',  6, 0, smallFont );
-  drawStringSH1106( text,  7, 0, smallFont );
-}
 
 
 //-----------------------------------------------------------------------------
@@ -197,67 +167,67 @@ void StartTimer1( word overflow ) {
 //-----------------------------------------------------------------------------
 void showMenu( void ) {
   uint8_t x, y, i;
-  drawBox( "Signal Generator" );
+  SH1106.drawBox( F("Signal Generator") );
 
   if ( sweep == swOff ) {
     x = 20;
     y = 2;
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor )
-        drawImageSH1106( x + 2, y + 2, imgCurUp );
-      x += drawIntSH1106( freqStart[ i ], x, y, largeDigitsFont );
+        SH1106.drawImage( x + 2, y + 2, imgCurUp );
+      x += SH1106.drawInt( freqStart[ i ], x, y, SH1106.largeDigitsFont );
     }
-    drawImageSH1106( x + 6, y, imgHz );
+    SH1106.drawImage( x + 6, y, imgHz );
   } else {
     x = 60;
     y = 2;
-    drawStringSH1106( "Start Freq:", 12, y, smallFont );
+    SH1106.drawString( F("Start Freq:"), 12, y, SH1106.smallFont );
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor )
-        drawImageSH1106( x - 2, y + 1, imgCurUp );
-      x += drawIntSH1106( freqStart[ i ], x, y, smallFont );
+        SH1106.drawImage( x - 2, y + 1, imgCurUp );
+      x += SH1106.drawInt( freqStart[ i ], x, y, SH1106.smallFont );
     }
-    drawStringSH1106( " Hz",  x, y, smallFont );
+    SH1106.drawString( F(" Hz"),  x, y, SH1106.smallFont );
 
     x = 60;
     y = 4;
-    drawStringSH1106( "Stop Freq:", 12, y, smallFont );
+    SH1106.drawString( F("Stop Freq:"), 12, y, SH1106.smallFont );
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor - digits )
-        drawImageSH1106( x - 2, y + 1, imgCurUp );
-      x += drawIntSH1106( freqStop[ i ], x, y, smallFont );
+        SH1106.drawImage( x - 2, y + 1, imgCurUp );
+      x += SH1106.drawInt( freqStop[ i ], x, y, SH1106.smallFont );
     }
-    drawStringSH1106( " Hz",  x, y, smallFont );
+    SH1106.drawString( F(" Hz"),  x, y, SH1106.smallFont );
   }
 
   x = 14;
   y = 6;
   if ( cursor == waveformPos )
-    drawImageSH1106( x - 6, y, imgCurRt );
+    SH1106.drawImage( x - 6, y, imgCurRt );
   //  switch ( waveType ) {
-  //    case wSine:      drawStringSH1106( "Sine",     x, y, smallFont ); break;
-  //    case wTriangle:  drawStringSH1106( "Triangle", x, y, smallFont ); break;
-  //    case wRectangle: drawStringSH1106( "Rectangle",   x, y, smallFont ); break;
+  //    case wSine:      SH1106.drawString( F("Sine"),     x, y, SH1106.smallFont ); break;
+  //    case wTriangle:  SH1106.drawString( F("Triangle"), x, y, SH1106.smallFont ); break;
+  //    case wRectangle: SH1106.drawString( F("Rectangle"),   x, y, SH1106.smallFont ); break;
   //  }
   for ( x = 14; x < 42; x += 14 )
     switch ( waveType ) {
-      case wReset:     if ( 14 == x ) drawStringSH1106( "OFF", 20, y, smallFont ); break;
-      case wSine:      drawImageSH1106( x, y, imgSine ); break;
-      case wTriangle:  drawImageSH1106( x, y, imgTria ); break;
-      case wRectangle: drawImageSH1106( x, y, imgRect ); break;
+      case wReset:     if ( 14 == x ) SH1106.drawString( F("OFF"), 20, y, SH1106.smallFont ); break;
+      case wSine:      SH1106.drawImage( x, y, imgSine ); break;
+      case wTriangle:  SH1106.drawImage( x, y, imgTria ); break;
+      case wRectangle: SH1106.drawImage( x, y, imgRect ); break;
     }
 
   x = 54;
   y = 6;
   switch ( sweep ) {
-    case swOff:       drawStringSH1106( "Constant",     x, y, smallFont ); break;
-    case sw1Sec:      drawStringSH1106( "Sweep 1 Sec",  x, y, smallFont ); break;
-    case sw3Sec:      drawStringSH1106( "Sweep 3 Sec",  x, y, smallFont ); break;
-    case sw10Sec:     drawStringSH1106( "Sweep 10 Sec", x, y, smallFont ); break;
-    case sw30Sec:     drawStringSH1106( "Sweep 30 Sec", x, y, smallFont ); break;
+    case swOff:       SH1106.drawString( F("Constant"),     x, y, SH1106.smallFont ); break;
+    case sw1Sec:      SH1106.drawString( F("Sweep 1 Sec"),  x, y, SH1106.smallFont ); break;
+    case sw3Sec:      SH1106.drawString( F("Sweep 3 Sec"),  x, y, SH1106.smallFont ); break;
+    case sw10Sec:     SH1106.drawString( F("Sweep 10 Sec"), x, y, SH1106.smallFont ); break;
+    case sw30Sec:     SH1106.drawString( F("Sweep 30 Sec"), x, y, SH1106.smallFont ); break;
   }
   if ( cursor == sweepPos )
-    drawImageSH1106( x - 6, y, imgCurRt );
+    SH1106.drawImage( x - 6, y, imgCurRt );
 }
 
 
@@ -631,6 +601,14 @@ void parseSerial( void ) {
 }
 
 
+void initButtons() {
+  pinMode( btnLeft,  INPUT_PULLUP );
+  pinMode( btnRight, INPUT_PULLUP );
+  pinMode( btnUp,    INPUT_PULLUP );
+  pinMode( btnDown,  INPUT_PULLUP );
+}
+
+
 //-----------------------------------------------------------------------------
 // initSigGen
 //-----------------------------------------------------------------------------
@@ -649,7 +627,7 @@ void initSigGen( void ) {
 // configTimer2
 // output 50 kHz rectangele at D3 for a charge pump
 //-----------------------------------------------------------------------------
-void configTimer2() 
+void initTimer2()
 {
   //Initialize Timer2
   TCCR2A = 0;
@@ -658,7 +636,7 @@ void configTimer2()
 
   // Set OC2B for Compare Match (digital pin3)
   pinMode( pwmOut, OUTPUT );
-  
+
   bitSet( TCCR2A, COM2B1 );//clear OC2B on up count compare match
 
   // Set mode 5 -> Phase correct PWM to OCR2A counts up and down
@@ -671,7 +649,7 @@ void configTimer2()
   //bitSet(TCCR2B, CS22);
 
   OCR2A = 160; // Sets t = 10 µs up + 10 µs down -> freq = 50 kHz
-  OCR2B = 80; // 50% duty cycle, valid values: 0 (permanent low), 1..79, 80 (permanent high)
+  OCR2B = 80;  // 50% duty cycle, valid values: 0 (permanent low), 1..79, 80 (permanent high)
 }
 
 
@@ -689,19 +667,10 @@ void setup( void ) {
   Serial.println( F( "SigGen2 " __DATE__ ) ); // compilation date
   Serial.println( F( "OK" ) );
 
-  pinMode( btnLeft,  INPUT_PULLUP );
-  pinMode( btnRight, INPUT_PULLUP );
-  pinMode( btnUp,    INPUT_PULLUP );
-  pinMode( btnDown,  INPUT_PULLUP );
-
-  Wire.begin (); // join i2c bus as master
-  TWBR = 5; // freq=615kHz period=1.625uS
-
-  configTimer2();
-
-  initSH1106 ();
-
-  initSigGen ();
+  initTimer2();  // init timer output for neg. voltage charge pump
+  initButtons(); // prepare the UI buttons
+  SH1106.init(); // init the display
+  initSigGen();  // and finally init the signal generator
 
 }
 
@@ -710,8 +679,8 @@ void setup( void ) {
 // Main routines
 // loop
 //-----------------------------------------------------------------------------
-void loop ( void ) {
-  execMenu ();
+void loop( void ) {
+  execMenu();
 }
 
 
