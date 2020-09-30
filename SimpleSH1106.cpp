@@ -8,40 +8,41 @@
 #include <avr/pgmspace.h>
 #include <Wire.h>
 
-bool BoldSH1106 = false;
+bool boldSH1106 = false;
 
-const int colOffset = 0;
+const int colOffset = 0; // = 2 for 1.3" display
+
 
 //==============================================================
 // drawByteSH1106
-//   draws a byte b at x, page
+//   draws a byte at x,page
 //   sets up the row and column then sends the byte
 //   quite slow
 //==============================================================
-void drawByteSH1106( uint8_t x, uint8_t page, uint8_t b ) {
+void drawByteSH1106( byte x, byte page, byte i ) {
   setupPageCol( page, x );
-  Wire.write( b );
-  Wire.endTransmission ();
+  Wire.write( i );
+  Wire.endTransmission();
 }
 
 
 //==============================================================
 // setupPageCol
 //   sets up the row and column
-//   then gets ready to send one or more uint8_ts
+//   then gets ready to send one or more bytes
 //   should be followed by endTransmission
 //==============================================================
 void setupPageCol( uint8_t page, uint8_t col ) {
   col += colOffset;
   Wire.beginTransmission( addr );
-  Wire.write( 0x00 ); // the following uint8_ts are commands
+  Wire.write( 0x00 ); // the following bytes are commands
   Wire.write( 0xB0 + page ); // set page
   Wire.write( 0x00 + ( col & 15 ) ); // lower columns address
   Wire.write( 0x10 + ( col >> 4 ) ); // upper columns address
-  Wire.endTransmission ();
+  Wire.endTransmission();
 
   Wire.beginTransmission( addr );
-  Wire.write( 0x40 ); // the following bytess are data
+  Wire.write( 0x40 ); // the following bytes are data
 }
 
 
@@ -52,10 +53,10 @@ void setupPageCol( uint8_t page, uint8_t col ) {
 void setupCol( uint8_t col ) {
   col += colOffset;
   Wire.beginTransmission( addr );
-  Wire.write( 0x00 ); // the following uint8_ts are commands
+  Wire.write( 0x00 ); // the following bytes are commands
   Wire.write( 0x00 + ( col & 15 ) ); // lower columns address
   Wire.write( 0x10 + ( col >> 4 ) ); // upper columns address
-  Wire.endTransmission ();
+  Wire.endTransmission();
 }
 
 
@@ -65,9 +66,9 @@ void setupCol( uint8_t col ) {
 //==============================================================
 void setupPage( uint8_t page ) {
   Wire.beginTransmission( addr );
-  Wire.write( 0x00 ); // the following uint8_ts are commands
+  Wire.write( 0x00 ); // the following bytes are commands
   Wire.write( 0xB0 + page ); // set page
-  Wire.endTransmission ();
+  Wire.endTransmission();
 }
 
 
@@ -75,15 +76,14 @@ void setupPage( uint8_t page ) {
 // clearSH1106
 //   fills the screen with zeros
 //==============================================================
-void clearSH1106 () {
-  uint8_t x, p;
-  const uint8_t n = 26;
-  for ( p = 0; p <= 7; ++p )
-    for ( x = 0; x <= 127; ++x ) {
+void clearSH1106() {
+  int x, p;
+  const int n = 26;
+  for ( p = 0; p <= 7; p++ )
+    for ( x = 0; x <= 127; x++ ) {
       if ( x % n == 0 ) setupPageCol( p, x );
       Wire.write( 0 );
-      if ( ( x % n == n - 1 ) || ( x == 127 ) )
-        Wire.endTransmission ();
+      if ( ( x % n == n - 1 ) || ( x == 127 ) ) Wire.endTransmission();
     }
 }
 
@@ -92,10 +92,10 @@ void clearSH1106 () {
 // initSH1106
 //   initialises the SH1106 registers
 //==============================================================
-void initSH1106 () {
-  Wire.endTransmission ();
+void initSH1106() {
+  Wire.endTransmission();
   Wire.beginTransmission( addr );
-  Wire.write( 0x00 ); // the following uint8_ts are commands
+  Wire.write( 0x00 ); // the following bytes are commands
   Wire.write( 0xAE ); // display off
   Wire.write( 0xD5 ); Wire.write( 0x80 ); // clock divider
   Wire.write( 0xA8 ); Wire.write( 0x3F ); // multiplex ratio ( height - 1 )
@@ -114,9 +114,9 @@ void initSH1106 () {
   Wire.write( 0xA6 ); // display mode A6=normal, A7=inverse
   Wire.write( 0x2E ); // stop scrolling
   Wire.write( 0xAF ); // display on
-  Wire.endTransmission ();
+  Wire.endTransmission();
 
-  clearSH1106 ();
+  clearSH1106();
 }
 
 
@@ -126,36 +126,11 @@ void initSH1106 () {
 //   a 'bar' is a byte on the screen - a col of 8 pix
 //   assumes you've set up the page and col
 //==============================================================
-void drawBarSH1106( uint8_t bar ) {
+void drawBarSH1106( byte bar ) {
   Wire.beginTransmission( addr );
-  Wire.write( 0x40 ); // the following uint8_ts are data
+  Wire.write( 0x40 ); // the following bytes are data
   Wire.write( bar );
-  Wire.endTransmission ();
-}
-
-
-static uint8_t page, ax, curpage, n, wid;
-
-//==============================================================
-// drawImageSH1106Bar
-//   draws one bar at x, p*8
-//==============================================================
-static void drawImageSH1106Bar( uint8_t x, uint8_t p, uint8_t bar ) {
-  if ( ( page >= 0 ) && ( page <= 7 ) && ( ax >= 0 ) && ( ax <= 127 ) ) {
-    ++n;
-    if ( ( page != curpage ) || ( n > 25 ) ) {
-      if ( curpage >= 0 )
-        Wire.endTransmission ();
-      setupPageCol( page, ax );
-      curpage = page;
-      n = 0;
-    }
-    Wire.write( bar );
-  }
-  if ( ++ax > x + wid - 1 ) {
-    ++page;
-    ax = x;
-  }
+  Wire.endTransmission();
 }
 
 
@@ -165,9 +140,29 @@ static void drawImageSH1106Bar( uint8_t x, uint8_t p, uint8_t bar ) {
 //   unpacks RLE and draws it
 //   returns width of image
 //==============================================================
-int drawImageSH1106( uint8_t x, uint8_t p, const uint8_t *bitmap ) {
-  uint8_t pages, j, k, bar;
-  wid = pgm_read_byte( bitmap++ );
+uint8_t drawImageSH1106( uint8_t x, uint8_t p, const uint8_t *bitmap ) {
+#define drawImageSH1106Bar {\
+    if ( ( page >= 0 ) && ( page <= 7 ) && ( ax >= 0 ) && ( ax <= 127 ) ) {\
+      n++;\
+      if ( ( page != curpage ) || ( n > 25 ) ){\
+        if ( curpage >= 0 ) \
+          Wire.endTransmission();\
+        setupPageCol( page, ax );\
+        curpage = page;\
+        n = 0;\
+      }\
+      Wire.write( bar );\
+    }  \
+    ax++;\
+    if ( ax > x + width - 1 ) {\
+      page++;\
+      ax = x;\
+    }\
+  }
+
+  uint8_t width, pages, page, ax, bar, curpage, n;
+
+  width = pgm_read_byte( bitmap++ );
   pages = pgm_read_byte( bitmap++ );
 
   page = p;
@@ -175,24 +170,24 @@ int drawImageSH1106( uint8_t x, uint8_t p, const uint8_t *bitmap ) {
   curpage = -1;
 
   while ( page <= p + pages - 1 ) {
-    j = pgm_read_byte( ++bitmap );
-    if ( j > 127 ) {
-      for ( k = 129; k <= j; ++k ) {
-        bar = pgm_read_byte( bitmap );
-        drawImageSH1106Bar( x, p, bar );
+    uint8_t j = pgm_read_byte( bitmap++ );
+    if ( j > 127 ) { // repeat next bar (j-128)-times
+      bar = pgm_read_byte( bitmap++ );
+      for ( uint8_t i = 128; i < j; ++i ) {
+        drawImageSH1106Bar
       }
-      ++bitmap;
-    } else {
-      for ( k = 1; k <= j; ++k ) {
-        bar = pgm_read_byte( ++bitmap );
-        drawImageSH1106Bar( x, p, bar );
+    } else { // draw next j bars
+      for ( uint8_t i = 0; i < j; ++i ) {
+        bar = pgm_read_byte( bitmap++ );
+        drawImageSH1106Bar
       }
     }
   }
-  Wire.endTransmission ();
+  Wire.endTransmission();
 
-  return wid;
+  return width;
 }
+
 
 //==============================================================
 // drawCharSH1106
@@ -200,77 +195,79 @@ int drawImageSH1106( uint8_t x, uint8_t p, const uint8_t *bitmap ) {
 //   only 8-bit or less fonts are allowed
 //   returns width of char + 1 ( letter_gap )
 //==============================================================
-int drawCharSH1106( uint8_t c, uint8_t x, uint8_t page, const uint8_t *Font ) {
-  word n, i, j, h, result, b, prevB;
+uint8_t drawCharSH1106( uint8_t c, uint8_t x, uint8_t page, const uint8_t *Font ) {
+  uint8_t n, i, j, h, result, b, prevB;
   result = 0;
   prevB = 0;
   j  =  pgm_read_byte_near( Font ); // first char
-  ++Font;
+  Font++;
   if ( c < j ) return 0;
 
   h  =  pgm_read_byte_near( Font ); // height in pages must be 1 or 2
-  ++Font;
+  Font++;
 
   while ( c > j ) {
     b  =  pgm_read_byte_near( Font );
-    ++Font;
+    Font++;
     if ( b == 0 ) return 0;
     Font += b * h;
-    --c;
+    c--;
   }
 
   n  =  pgm_read_byte_near( Font );
-  ++Font;
+  Font++;
   result = n + h; // letter_gap
 
   while ( h > 0 ) {
     setupPageCol( page, x );
-    for ( i = 0; i < n; ++i ) {
+    for ( i = 0; i < n; i++ ) {
       b  =  pgm_read_byte_near( Font );
-      ++Font;
-      if ( BoldSH1106 )
+      Font++;
+      if ( boldSH1106 )
         Wire.write( b | prevB );
       else
         Wire.write( b );
       prevB = b;
     }
 
-    if ( BoldSH1106 ) {
+    if ( boldSH1106 ) {
       Wire.write( prevB );
-      ++result;
+      result++;
     }
 
     Wire.write( 0 );
 
-    --h;
-    ++page;
-    Wire.endTransmission ();
+    h--;
+    page++;
+    Wire.endTransmission();
   }
   return result;
 }
+
 
 //==============================================================
 // drawStringSH1106
 //   draws a string at x,page
 //   returns width drawn
 //==============================================================
-int drawStringSH1106( const char *s, uint8_t x, uint8_t page, const uint8_t *Font ) {
-  int start = x;
+uint8_t drawStringSH1106( const char *s, uint8_t x, uint8_t page, const uint8_t *Font ) {
+  uint8_t start = x;
   if ( page <= 7 )
     while ( *s ) {
       x += drawCharSH1106( *s, x, page, Font );
-      ++s;
+      s++;
     }
   return x - start;
 }
+
 
 //==============================================================
 // drawIntSH1106
 //   draws an int at x,page
 //   returns width drawn
 //==============================================================
-int drawIntSH1106( long i, uint8_t x, uint8_t page, const uint8_t *Font ) {
-  int start = x;
+uint8_t drawIntSH1106( long i, uint8_t x, uint8_t page, const uint8_t *Font ) {
+  uint8_t start = x;
   if ( i < 0 ) {
     i = -i;
     x += drawCharSH1106( '-', x, page, Font );

@@ -27,11 +27,6 @@
 
 const long BAUDRATE  = 115200;  // Baud rate of UART in bps
 
-const int BtnLeft  = 8; // pushbutton
-const int BtnRight = 7; // pushbutton
-const int BtnUp    = 6; // pushbutton
-const int BtnDown  = 5; // pushbutton
-
 //-----------------------------------------------------------------------------
 // Global Variables
 //-----------------------------------------------------------------------------
@@ -42,29 +37,36 @@ const int BtnDown  = 5; // pushbutton
 // globals used in SigGen
 //-----------------------------------------------------------------------------
 
-const uint8_t digits = 6; // number of digits ( nOD ) in the frequency display
+const uint8_t digits = 6; // number of digits ( nOD ) in the frequency arrays
 uint8_t freqStart[ digits ] = { 0, 0, 1, 0, 0, 0 }; // 1000Hz cursor = 0..digits-1
 uint8_t freqStop[ digits ]  = { 0, 2, 0, 0, 0, 0 }; // 20kHz  cursor = digits..2*digits-1
+const uint8_t waveformPos  = 2 * digits;
+const uint8_t sweepPos   = 2 * digits + 1;
+
 uint8_t cursor = 0; // MSB freqStart
-const uint8_t WvFormPos  = 2 * digits;
-const uint8_t SweepPos   = 2 * digits + 1;
 
-const int wReset     = 0b0000000100000000;
-const int wSine      = 0b0000000000000000;
-const int wTriangle  = 0b0000000000000010;
-const int wRectangle = 0b0000000000101000;
-
+const uint16_t wReset     = 0b0000000100000000;
+const uint16_t wSine      = 0b0000000000000000;
+const uint16_t wTriangle  = 0b0000000000000010;
+const uint16_t wRectangle = 0b0000000000101000;
 
 enum sweep_t { swOff, sw1Sec, sw3Sec, sw10Sec, sw30Sec };
 sweep_t sweep = swOff;
 
-
-int waveType = wSine;
+uint16_t waveType = wSine;
 
 // connections to AD9833
 const int AD_FSYNC = 10;
 
-int SG_iSweep, SG_nSweep;
+// button inputs
+const int btnLeft  = 8; // pushbutton
+const int btnRight = 7; // pushbutton
+const int btnUp    = 6; // pushbutton
+const int btnDown  = 5; // pushbutton
+
+const int pwmOut   = 3; // output rectangle to create neg voltage
+
+uint16_t SG_iSweep, SG_nSweep;
 
 
 //-----------------------------------------------------------------------------
@@ -99,7 +101,7 @@ const uint8_t imgCurUp[] PROGMEM = {
   1, // pages
   7, // uint8_ts
   0x20, 0x30, 0x38, 0x3C, 0x38, 0x30, 0x20,
-}; 
+};
 
 const uint8_t imgTria[] PROGMEM = {
   14, // width
@@ -112,7 +114,7 @@ const uint8_t imgTria[] PROGMEM = {
 const uint8_t imgSine[] PROGMEM = {
   14, // width
   2,  // pages
-  28, // uint8_ts
+  28, // 28 bars
   0xE0, 0x1C, 0x02, 0x01, 0x01, 0x02, 0x1C, 0xE0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81, 0x8E, 0x90, 0xA0, 0xA0, 0x90, 0x8F
 };
@@ -120,22 +122,40 @@ const uint8_t imgSine[] PROGMEM = {
 const uint8_t imgRect[] PROGMEM = {
   14, // width
   2,  // pages
-  28, // uint8_ts
-  0x00, 0x00, 0x00, 0xFF, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 
-  0xA0, 0xA0, 0xA0, 0xBF, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xBF, 0xA0, 0xA0, 0xA0, 
+  28, // 28 bars
+  0x00, 0x00, 0x00, 0xFF, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00,
+  0xA0, 0xA0, 0xA0, 0xBF, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xBF, 0xA0, 0xA0, 0xA0,
 };
 
-
+#if 0
 const uint8_t imgHz[] PROGMEM = {
   20, // width
   2,  // pages
-  40, // uint8_ts
-  0xFE, 0xFE, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xFE, 0xFE, 
-  0x00, 0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  
+  40, // 
+  0xFE, 0xFE, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xFE, 0xFE,
+  0x00, 0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
   0xFF, 0xFF, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xFF, 0xFF,
-  0x00, 0x00, 0xC1, 0xE1, 0xF1, 0xD9, 0xCD, 0xC7, 0xC3, 0xC1, 
+  0x00, 0x00, 0xC1, 0xE1, 0xF1, 0xD9, 0xCD, 0xC7, 0xC3, 0xC1,
 };
 
+#else
+
+const uint8_t imgHz[] PROGMEM = { // bars are run length encoded
+  20, // width
+  2,  // pages
+  128 + 2, 0xFE, // 2x -> 0xFE, 0xFE,
+  128 + 6, 0x80, // 6x -> 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+  128 + 2, 0xFE, // 2x
+  128 + 2, 0x00, // 2x
+  128 + 8, 0x80, // 8x
+  128 + 2, 0xFF, // 2x
+  128 + 6, 0x01, // 6x
+  128 + 2, 0xFF, // 2x
+  128 + 2, 0x00, // 2x
+  8, // 8 bars
+  0xC1, 0xE1, 0xF1, 0xD9, 0xCD, 0xC7, 0xC3, 0xC1,
+};
+#endif
 
 //-----------------------------------------------------------------------------
 // drawBox
@@ -173,9 +193,9 @@ void StartTimer1( word overflow ) {
 
 
 //-----------------------------------------------------------------------------
-// drawSigGenMenu
+// showMenu
 //-----------------------------------------------------------------------------
-void drawSigGenMenu( void ) {
+void showMenu( void ) {
   uint8_t x, y, i;
   drawBox( "Signal Generator" );
 
@@ -185,7 +205,7 @@ void drawSigGenMenu( void ) {
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor )
         drawImageSH1106( x + 2, y + 2, imgCurUp );
-      x += drawIntSH1106( freqStart[ i ], x, y, LargeDigitsFont );
+      x += drawIntSH1106( freqStart[ i ], x, y, largeDigitsFont );
     }
     drawImageSH1106( x + 6, y, imgHz );
   } else {
@@ -212,12 +232,12 @@ void drawSigGenMenu( void ) {
 
   x = 14;
   y = 6;
-  if ( cursor == WvFormPos )
+  if ( cursor == waveformPos )
     drawImageSH1106( x - 6, y, imgCurRt );
   //  switch ( waveType ) {
   //    case wSine:      drawStringSH1106( "Sine",     x, y, smallFont ); break;
   //    case wTriangle:  drawStringSH1106( "Triangle", x, y, smallFont ); break;
-  //    case wRectangle:    drawStringSH1106( "Rectangle",   x, y, smallFont ); break;
+  //    case wRectangle: drawStringSH1106( "Rectangle",   x, y, smallFont ); break;
   //  }
   for ( x = 14; x < 42; x += 14 )
     switch ( waveType ) {
@@ -236,28 +256,28 @@ void drawSigGenMenu( void ) {
     case sw10Sec:     drawStringSH1106( "Sweep 10 Sec", x, y, smallFont ); break;
     case sw30Sec:     drawStringSH1106( "Sweep 30 Sec", x, y, smallFont ); break;
   }
-  if ( cursor == SweepPos )
+  if ( cursor == sweepPos )
     drawImageSH1106( x - 6, y, imgCurRt );
 }
 
 
 //-----------------------------------------------------------------------------
-//calculate the frequency from the array.
+//calculate the frequency from an array.
 //-----------------------------------------------------------------------------
-unsigned long calcFreq( uint8_t* freqSG ) {
+unsigned long calcFreq( const uint8_t *freqArray ) {
   unsigned long f = 0;
   for ( uint8_t x = 0; x < digits; ++x ) {
     f *= 10;
-    f += freqSG[ x ];
+    f += freqArray[ x ];
   }
   return f;
 }
 
 
 //-----------------------------------------------------------------------------
-// SG_WriteRegister ( SPI )
+// writeAD9833 ( SPI )
 //-----------------------------------------------------------------------------
-void SG_WriteRegister( word dat ) {
+void writeAD9833( word dat ) {
   digitalWrite( AD_FSYNC, LOW );
   SPI.transfer16( dat );
   digitalWrite( AD_FSYNC, HIGH );
@@ -265,51 +285,51 @@ void SG_WriteRegister( word dat ) {
 
 
 //-----------------------------------------------------------------------------
-// SG_Reset
+// resetAD9833
 //-----------------------------------------------------------------------------
-void SG_Reset () {
+void resetAD9833 () {
   delay( 100 );
-  SG_WriteRegister( wReset );
+  writeAD9833( wReset );
   sweep = swOff;
   delay( 100 );
 }
 
 
 //-----------------------------------------------------------------------------
-// SG_freqReset
+// resetFrequency
 //    reset the SG regs then set the frequency and wave type
 //-----------------------------------------------------------------------------
-void SG_freqReset( long frequency, int wave ) {
+void resetFrequency( long frequency, uint16_t wave ) {
   long fl = frequency * ( 0x10000000L / 25000000.0 );
-  SG_WriteRegister( 0x2100 );
-  SG_WriteRegister( uint16_t( fl & 0x3FFFL ) | 0x4000 );
-  SG_WriteRegister( uint16_t( ( fl & 0xFFFC000L ) >> 14 ) | 0x4000 );
-  SG_WriteRegister( 0xC000 );
-  SG_WriteRegister( wave );
+  writeAD9833( 0x2100 );
+  writeAD9833( uint16_t( fl & 0x3FFFL ) | 0x4000 );
+  writeAD9833( uint16_t( ( fl & 0xFFFC000L ) >> 14 ) | 0x4000 );
+  writeAD9833( 0xC000 );
+  writeAD9833( wave );
   waveType = wave;
 }
 
 
 //-----------------------------------------------------------------------------
-// SG_freqSet
-//    set the SG frequency regs
+// setFrequency
+//    set the SG frequency and waveform regs
 //-----------------------------------------------------------------------------
-void SG_freqSet( long frequency, int wave ) {
+void setFrequency( long frequency, uint16_t wave ) {
   long fl = frequency * ( 0x10000000L / 25000000.0 );
-  SG_WriteRegister( 0x2000 | wave );
-  SG_WriteRegister( uint16_t( fl & 0x3FFFL ) | 0x4000 );
-  SG_WriteRegister( uint16_t( ( fl & 0xFFFC000L ) >> 14 ) | 0x4000 );
+  writeAD9833( 0x2000 | wave );
+  writeAD9833( uint16_t( fl & 0x3FFFL ) | 0x4000 );
+  writeAD9833( uint16_t( ( fl & 0xFFFC000L ) >> 14 ) | 0x4000 );
 }
 
 
 //-----------------------------------------------------------------------------
-// SG_StepSweep
-//    increment the FG frequency
+// stepSweep
+//    increment the frequency
 //-----------------------------------------------------------------------------
-void SG_StepSweep( void ) {
+void stepSweep( void ) {
   if ( SG_iSweep > SG_nSweep ) SG_iSweep = 0;
   long f = exp( ( log( calcFreq( freqStop ) ) - log( calcFreq( freqStart ) ) ) * SG_iSweep / SG_nSweep + log( calcFreq( freqStart ) ) ) + 0.5;
-  SG_freqSet( f, waveType );
+  setFrequency( f, waveType );
   SG_iSweep++;
 }
 
@@ -327,35 +347,35 @@ void Sweep( int n ) {
   long fstop  = calcFreq( freqStop );
   int i = 0;
 
-  drawSigGenMenu ();
+  showMenu ();
 
   do {
     long f = exp( ( log( fstop ) - log( fstart ) ) * i / ( n - 1 ) + log( fstart ) ) + 0.5;
-    SG_freqSet( f, waveType );
+    setFrequency( f, waveType );
     delay( 1 );
     if ( ++i >= n ) {
       i = 0;
     }
   } while ( !Serial.available () );
   sweep = swOff;
-  SG_freqSet( calcFreq( freqStart ), waveType );
+  setFrequency( calcFreq( freqStart ), waveType );
 }
 #endif
 
 
 //-----------------------------------------------------------------------------
 // incItem
-//   increment digit for SigGen Menu
+//   increment item at cursor
 //-----------------------------------------------------------------------------
 void incItem( void ) {
-  if ( cursor == WvFormPos ) {
+  if ( cursor == waveformPos ) {
     switch ( waveType ) {
       case wReset:     waveType = wSine; break;
       case wSine:      waveType = wTriangle; break;
       case wTriangle:  waveType = wRectangle; break;
       case wRectangle: waveType = wReset; break;
     }
-  } else if ( cursor == SweepPos ) {
+  } else if ( cursor == sweepPos ) {
     if ( sweep == sw30Sec )
       sweep = swOff;
     else
@@ -371,23 +391,23 @@ void incItem( void ) {
     else
       freqStop[ cursor - digits ]++;
   }
-  drawSigGenMenu ();
+  showMenu ();
 }
 
 
 //-----------------------------------------------------------------------------
 // decItem
-//   decrement digit for SigGen Menu
+//   decrement item at cursor
 //-----------------------------------------------------------------------------
 void decItem( void ) {
-  if ( cursor == WvFormPos ) {
+  if ( cursor == waveformPos ) {
     switch ( waveType ) {
       case wReset:     waveType = wRectangle; break;
       case wRectangle: waveType = wTriangle; break;
       case wTriangle:  waveType = wSine; break;
       case wSine:      waveType = wReset; break;
     }
-  } else if ( cursor == SweepPos ) { // 1, 3, 10, 30
+  } else if ( cursor == sweepPos ) { // Off, 1s, 3s, 10s, 30s
     if ( sweep == swOff )
       sweep = sw30Sec;
     else
@@ -403,7 +423,7 @@ void decItem( void ) {
     else
       freqStop[ cursor - digits ]--;
   }
-  drawSigGenMenu ();
+  showMenu ();
 }
 
 
@@ -412,14 +432,14 @@ void decItem( void ) {
 //   increment caret position for SigGen Menu
 //-----------------------------------------------------------------------------
 void cursorRight( void ) {
-  if ( cursor == SweepPos )
+  if ( cursor == sweepPos )
     cursor = 0;
   else
     ++cursor;
   // skip over the stop frequency display if no sweep
   if ( ( cursor >= digits ) && ( cursor < 2 * digits ) && ( sweep == swOff ) )
-    cursor = WvFormPos;
-  drawSigGenMenu ();
+    cursor = waveformPos;
+  showMenu();
 }
 
 
@@ -429,23 +449,23 @@ void cursorRight( void ) {
 //-----------------------------------------------------------------------------
 void cursorLeft( void ) {
   if ( cursor == 0 )
-    cursor = SweepPos;
+    cursor = sweepPos;
   else
     --cursor;
   // skip over the stop frequency display if no sweep
   if ( ( cursor >= digits ) && ( cursor < 2 * digits ) && ( sweep == swOff ) )
     cursor = digits - 1;
-  drawSigGenMenu ();
+  showMenu ();
 }
 
 
 //-----------------------------------------------------------------------------
-// ExecSigGenMenu
+// execMenu
 //   SigGen menu
 //   user presses sel or Adj buttons
 //   return if no button for 2 sec
 //-----------------------------------------------------------------------------
-void ExecSigGenMenu( void ) {
+void execMenu( void ) {
   static int prevLeft  = 0;
   static int prevRight = 0;
   static int prevUp    = 0;
@@ -453,55 +473,55 @@ void ExecSigGenMenu( void ) {
   int i;
   const uint8_t timeout = 0xC0; // 3 sec to exit
 
-  drawSigGenMenu ();
+  showMenu ();
 
   StartTimer1( 0 );
   SG_iSweep = 0;
 
   do {
-    SerialCommand ();
+    parseSerial ();
 
-    i = digitalRead( BtnUp );
+    i = digitalRead( btnUp );
     if ( i != prevUp ) {
       prevUp = i;
       if ( i == LOW ) {
         incItem ();
-        drawSigGenMenu ();
-        SG_freqReset( calcFreq( freqStart ), waveType );
+        showMenu ();
+        resetFrequency( calcFreq( freqStart ), waveType );
       }
       myDelay( 100 );
       StartTimer1( 0 );
     }
 
-    i = digitalRead( BtnDown );
+    i = digitalRead( btnDown );
     if ( i != prevDown ) {
       prevDown = i;
       if ( i == LOW ) {
         decItem ();
-        drawSigGenMenu ();
-        SG_freqReset( calcFreq( freqStart ), waveType );
+        showMenu ();
+        resetFrequency( calcFreq( freqStart ), waveType );
       }
       myDelay( 100 );
       StartTimer1( 0 );
     }
 
-    i = digitalRead( BtnLeft );
+    i = digitalRead( btnLeft );
     if ( i != prevLeft ) {
       prevLeft = i;
       if ( i == LOW ) {
         cursorLeft ();
-        drawSigGenMenu ();
+        showMenu ();
       }
       myDelay( 100 );
       StartTimer1( 0 );
     }
 
-    i = digitalRead( BtnRight );
+    i = digitalRead( btnRight );
     if ( i != prevRight ) {
       prevRight = i;
       if ( i == LOW ) {
         cursorRight ();
-        drawSigGenMenu ();
+        showMenu ();
       }
       myDelay( 100 );
       StartTimer1( 0 );
@@ -514,7 +534,7 @@ void ExecSigGenMenu( void ) {
         case sw10Sec: SG_nSweep = 10000L * 65 / 100; break;
         case sw30Sec: SG_nSweep = 30000L * 65 / 100; break;
       }
-      SG_StepSweep ();
+      stepSweep();
     }
 
     i = TCNT1L; // to force read of TCNT1H
@@ -535,11 +555,11 @@ void myDelay( int mS ) {
 
 
 //-----------------------------------------------------------------------------
-// SerialCommand
+// parseSerial
 //   if a uint8_t is available in the serial input buffer
 //   execute it as a command
 //-----------------------------------------------------------------------------
-void SerialCommand( void ) {
+void parseSerial( void ) {
   static bool numeric = false; // input of argument
   static bool kiloMod = false; // true if char 'k' was input
   if ( Serial.available () > 0 ) {
@@ -564,18 +584,18 @@ void SerialCommand( void ) {
           break;
         case 'S':
           waveType = wSine;
-          SG_freqReset( calcFreq( freqStart ), waveType );
+          resetFrequency( calcFreq( freqStart ), waveType );
           break;
         case 'T':
           waveType = wTriangle;
-          SG_freqReset( calcFreq( freqStart ), waveType );
+          resetFrequency( calcFreq( freqStart ), waveType );
           break;
         case 'R':
           waveType = wRectangle;
-          SG_freqReset( calcFreq( freqStart ), waveType );
+          resetFrequency( calcFreq( freqStart ), waveType );
           break;
         case 'O':
-          SG_Reset ();
+          resetAD9833 ();
           waveType = wReset;
           break;
         case 'X': // exchange start and stop array
@@ -588,7 +608,7 @@ void SerialCommand( void ) {
           break;
         case 'C':
           sweep = swOff;
-          SG_freqReset( calcFreq( freqStart ), waveType );
+          resetFrequency( calcFreq( freqStart ), waveType );
           break;
         case 'G':
           sweep = sw1Sec;
@@ -606,22 +626,52 @@ void SerialCommand( void ) {
           return;
       }
     }
-    drawSigGenMenu ();
+    showMenu ();
   }
 }
 
 
 //-----------------------------------------------------------------------------
-// InitSigGen
+// initSigGen
 //-----------------------------------------------------------------------------
-void InitSigGen( void ) {
+void initSigGen( void ) {
   digitalWrite( AD_FSYNC, HIGH );
   pinMode( AD_FSYNC, OUTPUT );
   SPI.begin ();
-  SPI.beginTransaction( SPISettings( 4000000, MSBFIRST, SPI_MODE3 ) );
+  SPI.beginTransaction( SPISettings( 10000000, MSBFIRST, SPI_MODE3 ) );
 
-  SG_Reset ();
-  SG_freqReset( calcFreq( freqStart ), waveType );
+  resetAD9833();
+  resetFrequency( calcFreq( freqStart ), waveType );
+}
+
+
+//-----------------------------------------------------------------------------
+// configTimer2
+// output 50 kHz rectangele at D3 for a charge pump
+//-----------------------------------------------------------------------------
+void configTimer2() 
+{
+  //Initialize Timer2
+  TCCR2A = 0;
+  TCCR2B = 0;
+  TCNT2 = 0;
+
+  // Set OC2B for Compare Match (digital pin3)
+  pinMode( pwmOut, OUTPUT );
+  
+  bitSet( TCCR2A, COM2B1 );//clear OC2B on up count compare match
+
+  // Set mode 5 -> Phase correct PWM to OCR2A counts up and down
+  bitSet( TCCR2A, WGM20 );
+  bitSet( TCCR2B, WGM22 );
+
+  // Set up prescaler to 001 = clk (16 MHz)
+  bitSet(TCCR2B, CS20);
+  //bitSet(TCCR2B, CS21);
+  //bitSet(TCCR2B, CS22);
+
+  OCR2A = 160; // Sets t = 10 µs up + 10 µs down -> freq = 50 kHz
+  OCR2B = 80; // 50% duty cycle, valid values: 0 (permanent low), 1..79, 80 (permanent high)
 }
 
 
@@ -639,17 +689,20 @@ void setup( void ) {
   Serial.println( F( "SigGen2 " __DATE__ ) ); // compilation date
   Serial.println( F( "OK" ) );
 
-  pinMode( BtnLeft,  INPUT_PULLUP );
-  pinMode( BtnRight, INPUT_PULLUP );
-  pinMode( BtnUp,    INPUT_PULLUP );
-  pinMode( BtnDown,  INPUT_PULLUP );
+  pinMode( btnLeft,  INPUT_PULLUP );
+  pinMode( btnRight, INPUT_PULLUP );
+  pinMode( btnUp,    INPUT_PULLUP );
+  pinMode( btnDown,  INPUT_PULLUP );
 
   Wire.begin (); // join i2c bus as master
   TWBR = 5; // freq=615kHz period=1.625uS
 
+  configTimer2();
+
   initSH1106 ();
 
-  InitSigGen ();
+  initSigGen ();
+
 }
 
 
@@ -658,7 +711,7 @@ void setup( void ) {
 // loop
 //-----------------------------------------------------------------------------
 void loop ( void ) {
-  ExecSigGenMenu ();
+  execMenu ();
 }
 
 

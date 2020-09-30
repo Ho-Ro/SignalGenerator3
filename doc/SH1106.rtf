@@ -1,0 +1,155 @@
+{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fswiss\fcharset0 Arial;}}
+{\*\generator Msftedit 5.41.15.1515;}\viewkind4\uc1\pard\lang2057\f0\fs44 The CrudeSH1106 library\fs20\par
+\par
+The SH1106 has a built-in buffer with one bit per pixel. It is arranged as 128 columns by 7 swathes (other sizes are available); each swathe is 8 pixels high with the lsb at the top. In the SH1106 documentation, swathes are called "pages" but "swathe" is the standard term in computer graphics. The smallest unit you can write is one byte - a column of 8 pixels starting on an 8-pixel boundary; you can't set a single pixel which makes it hard to draw a diagonal line. (It may be possiblt to do read-modify-write but I haven't worked out how.)\par
+\par
+The display I'm using has an I2C interface (SPI and parallel are available on the SH1106). I2C is the slowest but is adequate for such a small screen.\par
+\par
+I wanted a small and fast driver library that didn't use much RAM or program ROM. The U8glib library works well but is huge and slow. So I opted to write my own.\par
+\par
+My library has no built-in buffer so all the commands are based on writing bytes to pages.\par
+\par
+\par
+\ul\b Physical interface\ulnone\b0\par
+\par
+The Atmel328p has a built in I2C driver. It's possible to write your own bit-bang driver but the built-in hardware has noise-reduction electronics. The Atmel328p I2C driver is connected to pins A4 (SDA) and A5 (SCL).\par
+\par
+The I2C bus consists of two lines - SDA and SCL - and needs pull-up resistors on those lines. The built-in I2C driver uses weak pull-ups to Vcc of around 50kohm. The SH1106 runs at 3.3V but the 50k pull-ups are so weak they don't damage the clipping diodes of the SH1106 and you can connect A4 and A5 directly to the display. \par
+\par
+The 50k pull-ups work at low speed but the rising edges are not fast enough for high-speed. \par
+\par
+I2C should have pull-ups equivalent to a maximum of 3mA which is 1k for 3.3V. The screen is powered by the 3V3 pin of an Arduino Nano so the pull-ups are also connected to the 3V3 pin. \par
+\par
+(The internal pull-ups are connected to 5V Vcc and can't be turned-off in I2C mode - I think. They don't interfere with with the 1k pull-ups to 3V3 and the SDA and SCL lines don't exceed 3.3V.)\par
+\par
+Some displays seem to have the pins in a different order. Check them.\par
+\par
+The x-coordinate of the pixels of the 0.9" display I bought run from x=0 to 127. With the 1.3" display they're from x=2 to 129. The library contains a constant "colOffset" which allows you to adjust the offset for your display.\par
+\par
+The 0.9" display was nice and bright (the library sets the contrast to its maximum). The 1.3" display was rather dim. The 1.3" display was missing two capactitors from the PCB; after I fitted some 100n, the display was brighter.\par
+\par
+\par
+\par
+\ul\b The Wire library\ulnone\b0\par
+\par
+The Arduino IDE has an I2C driver library called Wire.h. It's a nice small fast library but, as you would expect with Arduino, is poorly documented. \par
+\par
+The general command layout is to initialise it once:\par
+\par
+  Wire.begin(); // join i2c bus as master\par
+\par
+the send groups of bytes:\par
+\par
+  Wire.beginTransmission(0x3C); // address of display\par
+  Wire.write(1); // send byte\par
+  Wire.write(2); // send byte\par
+    ...\par
+  Wire.endTransmission();\par
+\par
+The Wire library collects the bytes in a 32-byte buffer and sends them when you call endTransmission(). The sending process is interrupt driven to achieve the timing requirements of I2C.\par
+\par
+For my Oscillloscope project, I turn off interrupts when I'm collecting data so I have to know when Wire has finished sending. I call beginTransmission() a second time to force Wire to wait until all the previous bytes have been sent.\par
+\par
+The 32-byte limit is annoying. It means my SH1106 driver has to keep count of how many bytes it has sent and start a new beginTransmission() ... endTransmission() block every so often.\par
+\par
+The Wire library initialises the I2C hardware to run at 100kHz. That works fine with the internal 50k pull-ups but I wanted faster. So after calling Wire.begin(), I set the Atmel328p TWBR register to a smaller value. I found that TWBR=5 (615kHz) works reliably. With longer wires or different pull-ups or different chips, a slower speed might be better. If you prefer, you could use Wire.setClock(frequency) rather than setting TWBR directly.\par
+\par
+\par
+\ul\b Sending Commands and Data\ulnone\b0\par
+\par
+When the SH1106 sees an I2C "start" - i.e. beginTransmission() - it expects either a sequence of commands or a sequence of data bytes. The sequence ends with an I2C "stop"  - i.e. endTransmission().\par
+\par
+The byte after "start" should be either 0x00 to send commands:\par
+\par
+  Wire.beginTransmission(addr);\par
+  Wire.write(0x00); // the following bytes are commands\par
+  Wire.write(command); \par
+  Wire.write(command); \par
+    ...\par
+  Wire.endTransmission();\par
+\par
+or should be 0x40 to send data:\par
+\par
+  Wire.beginTransmission(addr);\par
+  Wire.write(0x40); // the following bytes are data\par
+  Wire.write(data);\par
+  Wire.write(data);\par
+    ...\par
+  Wire.endTransmission();\par
+\par
+\par
+\ul\b Commands\ulnone\b0\par
+\par
+The SH1106 datasheet describes all its commands. I won't list them all here. A call to initSH1106() sets up the SH1106 registers appropriately.\par
+\par
+The SH1106 has a register for the current page and a register for the current column. Pixel bytes are witten to that page,column. page0 is at the top. Column 0 is at the left. The display has 8 pages of 128 columns.\par
+\par
+To send pixel bytes to the display you send commands to set up the SH1106 registers to point at a particular page and column:\par
+\par
+  Wire.beginTransmission(addr);\par
+  Wire.write(0x00); // the following bytes are commands\par
+  Wire.write(0xB0 + page); // set page\par
+  Wire.write(0x00+(col & 15)); // lower columns address\par
+  Wire.write(0x10+(col >> 4)); // upper columns address\par
+  Wire.endTransmission();\par
+\par
+Then you send the pixel bytes:\par
+\par
+  Wire.beginTransmission(addr);\par
+  Wire.write(0x40); // the following bytes are data\par
+  Wire.write(i);\par
+  Wire.write(j);\par
+    ...\par
+  Wire.endTransmission();\par
+\par
+After each pixel byte is received, the SH1106 increments the column address. So you can write a whole swathe - but remember the 32-byte limit of the Wire library.\par
+\par
+\par
+\ul\b Drawing\ulnone\b0\par
+\par
+Initialise the CrudeSH1106 library with:\par
+\par
+#include <Wire.h>\par
+  Wire.begin(); // join i2c bus as master\par
+  TWBR = 5; // freq=615kHz period=1.625uS (optional)\par
+  initSH1106();\par
+\par
+The CrudeSH1106 library has very few drawing commands. They are all limited to swathe (page) boundaries so, for instance, text can only be aligned to an 8-pixel y-address.\par
+\par
+\ul void clearSH1106();\ulnone  fills the screen with 0 bytes (black).\par
+\par
+\ul void DrawByteSH1106(byte x, byte page, byte i);\ulnone  draws a single byte (a column of 8 pixels) at x,page. It's relatively slow because it sets up the SH1106 page and column registers for each byte that's drawn.\par
+\par
+\ul int DrawImageSH1106(int16_t x, int16_t page, const uint8_t *bitmap);\ulnone  draws an image at x,page. The image has been declared in program memory as, for instance, \par
+\par
+  const byte bitmap[] PROGMEM = \{\par
+    16, // width\par
+    1, // pages height\par
+    4,2,127,0,124,130,4,1,124,130,4,3,120,0,38,131,73,1,50\};\par
+\par
+The bitmap is run-length-encoded. A Windows program to convert a black/white image to a RLE bitmap is provided.\par
+\par
+DrawImageSH1106 can be told to draw a bitmap partially off the screen. Only the visible parts will be drawn.\par
+\par
+The function returns the width of the bitmap.\par
+\par
+\ul int DrawCharSH1106(uint8_t c, byte x, byte page, word Font);\ulnone  draws a character at x,page. The font is always one swathe (page) high. Two fonts are provided - SmallFont has characters 32..127 and DigitsFont just has characters to draw numbers ('-', '.', '0'..'9').\par
+\par
+The entire character must be on the screen - no clipping is done.\par
+\par
+The function returns the width of the char plus one column for letter-spacing. So you could draw successive letters with:\par
+    x = 10;\par
+    x += DrawCharSH1106('H',x,1,Font);\par
+    x += DrawCharSH1106('e',x,1,Font);\par
+    x += DrawCharSH1106('l',x,1,Font);\par
+    x += DrawCharSH1106('l',x,1,Font);\par
+    x += DrawCharSH1106('o',x,1,Font);\par
+\par
+\ul int DrawStringSH1106(char *s, byte x, byte page, word Font);\ulnone  draws string at x,page. The entire string must be on the screen - no clipping is done. The function returns the width drawn plus one column for letter-spacing.\par
+\par
+\ul int DrawIntSH1106(int i, byte x, byte page, word Font);\ulnone  draws an integer at x,page. The entire string must be on the screen - no clipping is done. The function returns the width drawn plus one column for letter-spacing.\par
+\par
+So that's it, just a few simple functions. If you want more, write your own but beware of the 32-bytes buffer limit of the Wire library. Or use the U8glib library.\par
+\par
+}
+ 
