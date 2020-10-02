@@ -25,6 +25,7 @@ class SimpleSH1106 {
     uint8_t drawString( const char *s, uint8_t col, uint8_t page, const uint8_t *Font );
     uint8_t drawString( const __FlashStringHelper *s, uint8_t col, uint8_t page, const uint8_t *Font );
     uint8_t drawInt( long i, uint8_t col, uint8_t page, const uint8_t *Font );
+    void drawBar( uint8_t col, uint8_t page, uint8_t bar );
     void drawBox( const char* text );
     void drawBox( const __FlashStringHelper* text );
     bool bold = false;
@@ -42,7 +43,6 @@ class SimpleSH1106 {
     void setupCol( uint8_t col );
     void setupPage( uint8_t page );
     void drawBar( uint8_t bar );
-    void drawBar( uint8_t col, uint8_t page, uint8_t bar );
     static const uint8_t imgBoxTop[] PROGMEM;
     static const uint8_t imgBoxMid[] PROGMEM;
     static const uint8_t imgBoxBot[] PROGMEM;
