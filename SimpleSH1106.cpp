@@ -7,8 +7,9 @@
 
 #include "SimpleSH1106.h"
 
-// the display object
-SimpleSH1106 SH1106;
+
+SimpleSH1106::SimpleSH1106( uint8_t i2c ) : addrI2C( i2c ) {
+}
 
 //==============================================================
 // init

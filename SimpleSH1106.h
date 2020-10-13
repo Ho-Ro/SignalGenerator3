@@ -9,15 +9,15 @@
 
 ***************************************************/
 
-#ifndef SimpleSH1106_h
-#define SimpleSH1106_h
+#pragma once
 
 #include <Wire.h>
 #include <Arduino.h>
 
 class SimpleSH1106 {
-  
+
   public:
+    explicit SimpleSH1106( uint8_t i2c = 0x3C ); 
     void init();
     void clearScreen();
     uint8_t drawImage( uint8_t col, uint8_t row, const uint8_t *bitmap );
@@ -35,7 +35,7 @@ class SimpleSH1106 {
     static const uint8_t imgSmiley[] PROGMEM;
 
   private:
-    const uint8_t addrI2C = 0x3C;
+    const uint8_t addrI2C;
     const uint8_t PAGES = 8;
     const uint8_t COLUMNS = 128;
     const uint8_t colOffset = 0; // = 2 for 1.3" display
@@ -47,9 +47,3 @@ class SimpleSH1106 {
     static const uint8_t imgBoxMid[] PROGMEM;
     static const uint8_t imgBoxBot[] PROGMEM;
 };
-
-
-extern SimpleSH1106 SH1106;
-
-
-#endif
