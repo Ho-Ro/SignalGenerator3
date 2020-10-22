@@ -1,5 +1,7 @@
 //-----------------------------------------------------------------------------
 // Stand Alone Signal Generator
+// Signal generation with modified AD9833 board with amplifier
+// User interface: OLED, 4 buttons (left/right, up/down) and serial command line
 // Based on this project:
 // https://www.instructables.com/id/Signal-Generator-AD9833/
 // Copyright 2018 Peter Balch
@@ -44,15 +46,15 @@ const int AD_FSYNC = 10;
 
 SimpleSH1106 OLED;
 
-MCP4x MCP( 9 );
+MCP4x MCP( MCP_CS );
 
-AD9833 AD( 10 );
+AD9833 AD( AD_FSYNC );
 
 //-----------------------------------------------------------------------------
 // globals used in SigGen
 //-----------------------------------------------------------------------------
 
-const uint8_t digits = 6; // number of digits ( nOD ) in the frequency arrays
+const uint8_t digits = 6; // number of digits ( nOD ) in the number arrays
 // three number arrays: data input, start and stop frequency
 uint8_t dataInput[ digits ] = { 0, 0, 1, 0, 0, 0 }; // data input accumulator
 uint8_t freqStart[ digits ] = { 0, 0, 1, 0, 0, 0 }; // 1000Hz, cursor pos = 0..digits-1
@@ -74,9 +76,9 @@ int8_t dB = 0;
 // button inputs
 const int btnLeft  = 8; // pushbutton
 const int btnRight = 7; // pushbutton
-const int btnUp    = 6; // pushbutton
-const int btnDown  = 5; // pushbutton
-const int testOut  = 4; // output for test signal
+const int btnDown  = 6; // pushbutton
+const int btnUp    = 5; // pushbutton
+const int testOut  = 4; // output for a test signal
 const int pwmOut   = 3; // output rectangle to create a neg. voltage
 
 uint16_t sweepPosition, sweepSteps;
@@ -93,7 +95,7 @@ void setup( void ) {
   // Activate interrupts
   sei ();
 
-  Serial.println( F( "SignalGenerator3 " __DATE__ ) ); // compilation date
+  Serial.println( F( "Signal Generator 3 " __DATE__ ) ); // compilation date
 
   initTimer1(250);  // init timer1 for sweep timing
   initTimer2();  // init timer2 output for neg. voltage charge pump
@@ -193,9 +195,9 @@ const uint8_t imgUpDown[] PROGMEM = {
 //-----------------------------------------------------------------------------
 void showMenu( void ) {
   uint8_t col, page, i;
-  OLED.drawBox( F("Signal Generator") );
+  OLED.drawBox( F("Signal Generator 3") );
 
-  // show a vertical logarithmic gain bar on the left 
+  // show a vertical logarithmic gain bar on the left
   drawGain();
 
   if ( sweep == swOff ) { // one large frequency display
@@ -207,7 +209,7 @@ void showMenu( void ) {
       col += OLED.drawInt( freqStart[ i ], col, page, OLED.largeDigitsFont );
     }
     OLED.drawImage( col + 6, page, imgHz ); // display "Hz" as image (large font is num-only)
-  } else { // two small frequencies (sweep start and stop frequency) 
+  } else { // two small frequencies (sweep start and stop frequency)
     // 1st row
     page = 2;
     col = 70;
@@ -284,7 +286,7 @@ void drawGain() {
 //   show menu
 //   check for serial command
 //   check for pressed select or adjust buttons
-//   advance sweep frequency if sweep active 
+//   advance sweep frequency if sweep active
 //-----------------------------------------------------------------------------
 void execMenu( void ) {
   static uint8_t prevLeft  = 0;
@@ -299,11 +301,8 @@ void execMenu( void ) {
   sweepPosition = 0;
 
   do {
-    bool newFrequency = false;
-    if ( parseSerial() ) {
-      enterFreq();
-      newFrequency = true;
-    }
+    bool newFrequency = parseSerial();
+
     btn = digitalRead( btnUp );
     if ( btn != prevUp ) {
       prevUp = btn;
@@ -350,6 +349,12 @@ void execMenu( void ) {
       //StartTimer1( 0 );
     }
 
+    static bool test = true;
+    while ( ! (TIFR1 & _BV( OCF1A ) )  ) // wait for timer1 output compare match every ms
+      ;
+    test = ! test; // toggle the test pin
+    digitalWrite( testOut, test );
+
     if ( sweep == swOff ) {
       if ( newFrequency )
         AD.setFrequency( calcNumber( freqStart ), waveType );
@@ -360,11 +365,6 @@ void execMenu( void ) {
         case sw10Sec: sweepSteps = 10000L; break;
         case sw30Sec: sweepSteps = 30000L; break;
       }
-      static bool test = true;
-      while ( ! (TIFR1 & _BV( OCF1A ) )  ) // wait for timer1 output compare match every ms
-        ;
-      test = ! test; // toggle the test pin
-      digitalWrite( testOut, test );
       stepSweep( true ); // advance the frequency one step (true: up, false: down)
     }
     TIFR1 = 0xFF; // clear all timer1 flags
@@ -378,12 +378,15 @@ void execMenu( void ) {
 //   collect numbers or execute it as a command
 //-----------------------------------------------------------------------------
 bool parseSerial( void ) {
+  static bool echo = false;
   static bool numeric = false; // input of argument
   static bool kiloMod = false; // true if char 'k' was input
   static bool minus = false;
   bool newFrequency = false;
   if ( Serial.available () > 0 ) {
     char c = Serial.read ();
+    if ( echo )
+      Serial.write( c );
     if ( ( c >= '0' ) && ( c <= '9' ) ) {
       for ( int i = 0; i < digits - 1 ; ++i )
         dataInput[ i ] = numeric ? dataInput[ i + 1 ] : 0; // clear all or shift left
@@ -403,13 +406,22 @@ bool parseSerial( void ) {
     } else { // all other non numeric char stop number input
       numeric = false; // no more digits
       switch ( toupper( c ) ) {
-        case 'A':
-          setLinGain( calcNumber( dataInput ) );
-          minus = false;
-          popFreq();
-          showMenu();
+        case '?':
+          showStatus();
           break;
-        case 'B': {
+        case 'A': { // digital pot setting 0..256!
+            int16_t a = int16_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
+            minus = false;
+            if ( a < 0 )
+              a = 0;
+            else if ( a > 256 )
+              a = 256;
+            setLinGain( a );
+            popFreq();
+            showMenu();
+            break;
+          }
+        case 'B': { // set internal gain step 0..16 , kind of logarithmic shape
             int8_t b = int8_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
             minus = false;
             if ( b < 0 )
@@ -422,11 +434,14 @@ bool parseSerial( void ) {
             showMenu();
             break;
           }
-        case 'D':
+        case 'D': // set dB gain, value = -40..+7 dBV, smaller values = off
           setdBGain( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
           minus = false;
           popFreq();
           showMenu;
+          break;
+        case 'E':
+          echo = ! echo;
           break;
         case 'S':
           waveType = AD9833::wSine;
@@ -479,6 +494,46 @@ bool parseSerial( void ) {
 }
 
 
+// show status
+void showStatus() {
+  switch ( waveType ) {
+    case AD9833::wSine:
+      Serial.print( F( "Sine " ) );
+      break;
+    case AD9833::wTriangle:
+      Serial.print( F( "Triangle " ) );
+      break;
+    case AD9833::wRectangle:
+      Serial.print( F( "Rectangle " ) );
+      break;
+    case AD9833::wReset:
+      Serial.print( F( "Off " ) );
+      break;
+  }
+  if ( sweep != swOff ) {
+    Serial.print( F( "sweep " ) );
+    if ( sweep == sw1Sec )
+      Serial.print( F( "1 s " ) );
+    else if ( sweep == sw3Sec )
+      Serial.print( F( "3 s " ) );
+    else if ( sweep == sw10Sec )
+      Serial.print( F( "10 s " ) );
+    else if ( sweep == sw30Sec )
+      Serial.print( F( "30 s " ) );
+  }
+  Serial.print( calcNumber( freqStart ) );
+  Serial.print( F( " Hz" ) );
+  if ( sweep != swOff ) {
+    Serial.print( F( " to " ) );
+    Serial.print( calcNumber( freqStop ) );
+    Serial.print( F( " Hz" ) );
+  }
+  Serial.write( ' ' );
+  Serial.print( dB );
+  Serial.println( F( " dB" ) );
+}
+
+
 //-----------------------------------------------------------------------------
 // cursorRight
 //   increment caret position for SigGen Menu
@@ -501,7 +556,6 @@ void cursorRight( void ) {
 void cursorLeft( void ) {
   if ( cursor == 0 )
     cursor = exchgPos;
-  // cursor = sweep ? sweepPos : exchgPos;
   else
     --cursor;
   // skip over the stop frequency display if no sweep
@@ -512,7 +566,7 @@ void cursorLeft( void ) {
 
 //-----------------------------------------------------------------------------
 // incItem
-//   increment item at cursor
+//   increment menu item at cursor
 //-----------------------------------------------------------------------------
 void incItem( void ) {
   if (cursor == gainPos ) {
@@ -550,7 +604,7 @@ void incItem( void ) {
 
 //-----------------------------------------------------------------------------
 // decItem
-//   decrement item at cursor
+//   decrement menu item at cursor
 //-----------------------------------------------------------------------------
 void decItem( void ) {
   if (cursor == gainPos ) {
@@ -599,17 +653,25 @@ unsigned long calcNumber( const uint8_t *charArray ) {
 }
 
 
-static const uint8_t gainToPot[ 16 ] = {
-  0,    1,   2,   3,   5,   8,  11,  17, // -42, -36, -32, -30, -26, -22, -20, -17,
-  24,  37,  60,  85, 120, 170, 242, 255, // -14, -10,  -6,  -3,   0,   3,   6,   7
+// 100% -> 6.5 dBV output, the values below give some kind of logarithic steps
+static const uint8_t gainToPot[ 16 ] = { // 0: 1/256, 255: 256/256
+  0,    1,   2,   3,   5,   8,  11,  17, // dB: -42, -36, -32, -30, -26, -22, -20, -17,
+  24,  37,  60,  85, 120, 170, 242, 255, // dB: -14, -10,  -6,  -3,   0,   3,   6,   7
 };
+
+
+const float fullScale = 6.5f;
+
+int8_t dBfromValue( int value ) {
+  return int8_t( round( 20.0 * log10( ( value + 1 ) / 256.0 ) + fullScale ) );
+}
 
 
 void setGain() {
   if ( gain ) {
     int value = gainToPot[ gain - 1 ];
     MCP.setPot( value );
-    dB = int8_t( round( 20.0 * log10( ( value + 1 ) / 256.0 ) + 6.5 ) );
+    dB = dBfromValue( value );
     // Serial.println( gain );
     // Serial.println( dB );
     // Serial.println( value );
@@ -633,7 +695,7 @@ void setLinGain( int value ) { // 0..256
       if ( gainToPot[ gain - 1 ] < value )
         break;
     ++gain;
-    dB = int8_t( round( 20.0 * log10( ( value + 1 ) / 256.0 ) + 6.5 ) );
+    dB = dBfromValue( value );
   }
   // Serial.println( gain );
   // Serial.println( dB );
@@ -642,14 +704,15 @@ void setLinGain( int value ) { // 0..256
 
 
 void setdBGain( int value ) {
-  value = int( 256 * pow( 10.0, ( value - 6.5 ) / 20.0  ) + 0.5 );
+  value = int( 256 * pow( 10.0, ( value - fullScale ) / 20.0  ) + 0.5 );
   setLinGain( value );
 }
 
 
 //-----------------------------------------------------------------------------
 // stepSweep
-//    increment the frequency
+//    ramp the sweep frequency logarithmically
+//    according to number of steps between start and stop
 //-----------------------------------------------------------------------------
 void stepSweep( bool stepUp ) {
   if ( sweepPosition > sweepSteps ) sweepPosition = 0;
@@ -657,37 +720,8 @@ void stepSweep( bool stepUp ) {
                 * ( stepUp ? sweepPosition : sweepSteps - sweepPosition )
                 / sweepSteps + log( calcNumber( freqStart ) ) ) + 0.5;
   AD.setFrequency( f, waveType );
-  sweepPosition++;
+  ++sweepPosition;
 }
-
-
-#if 0
-//-----------------------------------------------------------------------------
-// Sweep
-//   sweeps siggen freq continuously
-//   takes n mS for whole sweep
-//   SDC regs are saved and restored
-//   stops when receives a serial char
-//-----------------------------------------------------------------------------
-void Sweep( int n ) {
-  long fstart = calcNumber( freqStart );
-  long fstop  = calcNumber( freqStop );
-  int i = 0;
-
-  showMenu ();
-
-  do {
-    long f = exp( ( log( fstop ) - log( fstart ) ) * i / ( n - 1 ) + log( fstart ) ) + 0.5;
-    setFrequency( f, waveType );
-    delay( 1 );
-    if ( ++i >= n ) {
-      i = 0;
-    }
-  } while ( !Serial.available () );
-  sweep = swOff;
-  setFrequency( calcNumber( freqStart ), waveType );
-}
-#endif
 
 
 //-----------------------------------------------------------------------------
@@ -737,7 +771,6 @@ void initSigGen( void ) {
   SPI.begin ();
 
   setdBGain( 0 );
-  // gain = 13;
 
   AD.reset();
   AD.setFrequency( calcNumber( freqStart ), waveType );
@@ -800,8 +833,8 @@ void initTimer2()
 
   // Set up prescaler to 001 = clk (16 MHz)
   bitSet(TCCR2B, CS20);
-  //bitSet(TCCR2B, CS21);
-  //bitSet(TCCR2B, CS22);
+  // bitSet(TCCR2B, CS21);
+  // bitSet(TCCR2B, CS22);
 
   OCR2A = 160; // Sets t = 10 µs up + 10 µs down -> freq = 50 kHz
   OCR2B = 80;  // 50% duty cycle, valid values: 0 (permanent low), 1..79, 80 (permanent high)
@@ -815,19 +848,3 @@ void initButtons() {
   pinMode( btnDown,  INPUT_PULLUP );
   pinMode( testOut,  OUTPUT );
 }
-
-#if 0
-//-----------------------------------------------------------------------------
-// writeMCP41 ( SPI )
-//-----------------------------------------------------------------------------
-void writeMCP41( int data ) {
-  if ( data > 255 )
-    data = 255;
-  else if ( data < 0 )
-    data = 0;
-  SPI.beginTransaction( SPISettings( 10000000, MSBFIRST, SPI_MODE0 ) );
-  digitalWrite( MCP_CS, LOW );
-  SPI.transfer16( 0x1100 + data );
-  digitalWrite( MCP_CS, HIGH );
-}
-#endif
