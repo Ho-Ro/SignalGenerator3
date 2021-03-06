@@ -1,8 +1,10 @@
+undefined
 .bak
 .*~
 *~
 *.orig
 *.new
+*.old
 *.diff
 *.autosave
 *.zip

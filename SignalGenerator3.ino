@@ -6,6 +6,34 @@
 // https://www.instructables.com/id/Signal-Generator-AD9833/
 // Copyright 2018 Peter Balch
 // subject to the GNU General Public License
+//
+// Changelog:
+// 20210306:    6 digits (999.999 kHz) -> 7 digits (9.999999 MHz)
+// 20201022:    1st "tin box" version
+// 20201013:    dB setting
+// 20201002:    gain setting
+// 20200927:    sync HW buttons and USB UI
+// 20200926:    1st version
+//
+// USB serial interface:
+// [:num:]?[:cmd:]
+// num = [-]?[0-9]{1,7}[kM]? e.g. '123' or '-10' or '150k' or '1M'
+// cmd:
+// E: echo on/off
+// A: digital pot linear setting, num = 0..256
+// B: digital pot log setting, num = 0..16
+// D: set dB gain, num = -40..+7 (dBV), smaller values = off
+// O: output off
+// R: output rectangle
+// S: output sine
+// T: output triangle
+// F: output/display freq1
+// G: sweep 1s from freq1 to freq2
+// H: sweep 3s from freq1 to freq2
+// I: sweep 10s from freq1 to freq2
+// J: sweep 30s from freq1 to freq2
+// X: exchange freq1 and freq2
+//
 //-----------------------------------------------------------------------------
 
 #include <SPI.h>
@@ -54,11 +82,11 @@ AD9833 AD( AD_FSYNC );
 // globals used in SigGen
 //-----------------------------------------------------------------------------
 
-const uint8_t digits = 6; // number of digits ( nOD ) in the number arrays
+const uint8_t digits = 7; // number of digits ( nOD ) in the number arrays
 // three number arrays: data input, start and stop frequency
-uint8_t dataInput[ digits ] = { 0, 0, 1, 0, 0, 0 }; // data input accumulator
-uint8_t freqStart[ digits ] = { 0, 0, 1, 0, 0, 0 }; // 1000Hz, cursor pos = 0..digits-1
-uint8_t freqStop[ digits ]  = { 0, 2, 0, 0, 0, 0 }; // 20kHz,  cursor pos = digits..2*digits-1
+uint8_t dataInput[ digits ] = { 0, 0, 0, 1, 0, 0, 0 }; // data input accumulator
+uint8_t freqStart[ digits ] = { 0, 0, 0, 1, 0, 0, 0 }; // 1000Hz, cursor pos = 0..digits-1
+uint8_t freqStop[ digits ]  = { 0, 0, 2, 0, 0, 0, 0 }; // 20kHz,  cursor pos = digits..2*digits-1
 const uint8_t waveformPos  = 2 * digits; // cursor position for these items
 const uint8_t sweepPos     = 2 * digits + 1;
 const uint8_t gainPos      = 2 * digits + 2;
@@ -95,7 +123,7 @@ void setup( void ) {
   // Activate interrupts
   sei ();
 
-  Serial.println( F( "Signal Generator 3 " __DATE__ ) ); // compilation date
+  Serial.println( F( "Signal Generator 3 - " __DATE__ ) ); // compilation date
 
   initTimer1(250);  // init timer1 for sweep timing
   initTimer2();  // init timer2 output for neg. voltage charge pump
@@ -202,18 +230,18 @@ void showMenu( void ) {
 
   if ( sweep == swOff ) { // one large frequency display
     page = 2;
-    col = 25;
+    col = 20;
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor )
         OLED.drawImage( col + 2, page + 2, imgCurUp );
       col += OLED.drawInt( freqStart[ i ], col, page, OLED.largeDigitsFont );
     }
-    OLED.drawImage( col + 6, page, imgHz ); // display "Hz" as image (large font is num-only)
+    OLED.drawImage( col + 2, page, imgHz ); // display "Hz" as image (large font is num-only)
   } else { // two small frequencies (sweep start and stop frequency)
     // 1st row
     page = 2;
     col = 70;
-    OLED.drawString( F("Start Freq:"), 24, page, OLED.smallFont );
+    OLED.drawString( F("Start Freq: "), 24, page, OLED.smallFont );
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor )
         OLED.drawImage( col - 2, page + 1, imgCurUp );
@@ -223,7 +251,7 @@ void showMenu( void ) {
     // 2nd row
     page = 4;
     col = 70;
-    OLED.drawString( F("Stop Freq:"), 24, page, OLED.smallFont );
+    OLED.drawString( F("Stop Freq: "), 24, page, OLED.smallFont );
     for ( i = 0; i < digits; ++i ) {
       if ( i == cursor - digits )
         OLED.drawImage( col - 2, page + 1, imgCurUp );
@@ -264,7 +292,7 @@ void showMenu( void ) {
   if ( cursor == sweepPos )
     OLED.drawImage( col - 6, 6, imgCurRt );
   else if ( cursor == exchgPos )
-    OLED.drawImage( 14, 2, imgUpDown );
+    OLED.drawImage( 12, 2, imgUpDown );
   else if ( cursor == gainPos )
     OLED.drawImage( 4, 5, imgCurUp );
 }
@@ -274,7 +302,7 @@ void showMenu( void ) {
 void drawGain() {
   uint32_t bar4 = 0xFFFFFFFFL << 32 - 2 * gain;
   for ( uint8_t page = 1; page < 5; ++page ) {
-    for ( uint8_t col = 5; col < 10; ++col )
+    for ( uint8_t col = 4; col < 10; ++col )
       OLED.drawBar( col, page, lowByte( bar4 ) );
     bar4 >>= 8;
   }
@@ -380,26 +408,37 @@ void execMenu( void ) {
 bool parseSerial( void ) {
   static bool echo = false;
   static bool numeric = false; // input of argument
-  static bool kiloMod = false; // true if char 'k' was input
+  static bool kiloMegaMod = false;  // true if char 'k' or 'M' was input
   static bool minus = false;
   bool newFrequency = false;
   if ( Serial.available () > 0 ) {
     char c = Serial.read ();
     if ( echo )
       Serial.write( c );
-    if ( ( c >= '0' ) && ( c <= '9' ) ) {
+    if ( ( c >= '0' ) && (
+         c <= '9' ) ) {
       for ( int i = 0; i < digits - 1 ; ++i )
         dataInput[ i ] = numeric ? dataInput[ i + 1 ] : 0; // clear all or shift left
       dataInput[ digits - 1 ] = c - '0'; // add new digit at the right
       numeric = true; // we are in argument input mode
-      kiloMod = false;
+      kiloMegaMod = false;
     } else if ( c == 'k' || c == 'K' ) {
-      if ( !kiloMod ) { // apply only once
-        for ( int i = 0 ; i < digits - 3 ; i++ ) {
+      if ( !kiloMegaMod ) { // apply only once
+        for ( int i = 0 ; i < digits - 3 ; ++i ) {
           dataInput[ i ] = dataInput[ i + 3 ]; // value << 3 digits
           dataInput[ i + 3 ] = 0; // clear last 3 digits
         }
-        kiloMod = true;
+        kiloMegaMod = true;
+        numeric = false;
+      }
+    } else if ( c == 'M' || c == 'm' ) {
+      if ( !kiloMegaMod ) { // apply only once
+        dataInput[ 0 ] = dataInput[ 6 ]; // value << 6 digits
+        for ( int i = 1 ; i < digits  ; ++i ) {
+          dataInput[ i ] = 0; // clear last 6 digits
+        }
+        kiloMegaMod = true;
+        numeric = false;
       }
     } else if ( c == '-' ) {
       minus = true;
@@ -440,42 +479,42 @@ bool parseSerial( void ) {
           popFreq();
           showMenu;
           break;
-        case 'E':
+        case 'E': // toggle terminal echo
           echo = ! echo;
           break;
-        case 'S':
+        case 'S': // sine output
           waveType = AD9833::wSine;
           newFrequency = true;
           break;
-        case 'T':
+        case 'T': // triangle output
           waveType = AD9833::wTriangle;
           newFrequency = true;
           break;
-        case 'R':
+        case 'R': // rectangle output
           waveType = AD9833::wRectangle;
           newFrequency = true;
           break;
-        case 'O':
+        case 'O': // output off
           AD.reset();
           waveType = AD9833::wReset;
           break;
-        case 'C':
+        case 'F': // freq1 (no sweep)
           sweep = swOff;
           newFrequency = true;
           break;
-        case 'G':
+        case 'G': // sweep from freq1 to freq2 within 1 second
           sweep = sw1Sec;
           break;
-        case 'H':
+        case 'H': // sweep 3s
           sweep = sw3Sec;
           break;
-        case 'I':
+        case 'I': // sweep 10s
           sweep = sw10Sec;
           break;
-        case 'J':
+        case 'J': // sweep 30s
           sweep = sw30Sec;
           break;
-        case 'X': // exchange start and stop array
+        case 'X': // exchange freq1 and freq2
           exchgFreq();
           popFreq();
           newFrequency = true;
@@ -496,6 +535,7 @@ bool parseSerial( void ) {
 
 // show status
 void showStatus() {
+  Serial.println();
   switch ( waveType ) {
     case AD9833::wSine:
       Serial.print( F( "Sine " ) );
