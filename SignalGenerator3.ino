@@ -2,7 +2,7 @@
 
 //-----------------------------------------------------------------------------
 // Stand Alone Signal Generator
-// Signal generation with modified AD9833 board with amplifier
+// Signal generation with AD9833 DDS board with MP41010 digital pot and OPA810 14 dB amplifier
 // User interface: OLED, 4 buttons (left/right, up/down) and serial command line
 //
 // Idea based on this project:
@@ -11,6 +11,7 @@
 //   subject to the GNU General Public License
 //
 // Changelog:
+// 20221126:    correct the dB display for f > 1MHz (valid for full gain output)
 // 20221124:    provide dBV, dBu, dBm display, change with btn down when at -60dB
 // 20210329:    round freq -> register value conversion
 // 20210319:    adapt rect amplitude
@@ -26,10 +27,10 @@
 // num = [-]?[0-9]{1,7}[kM]? e.g. '123' or '-10' or '150k' or '1M'
 // cmd:
 // ?: show status
-// A: digital pot linear setting, num = 0..256
-// B: digital pot log setting, num = 0..16
+// A: digital pot linear setting, num = 0..255, <0 = 0ff
+// B: digital pot log setting, num = 1..16, 0: off
 // C: -
-// D: set dB gain, num = -40..+7 (dBV), smaller values = off
+// D: set dB gain, num = -50..+10, smaller values = off
 // E: echo on/off
 // F: constant freq1
 // G: sweep 1s from freq1 to freq2
@@ -51,7 +52,7 @@
 // W: select dBm
 // X: exchange freq1 and freq2
 // Y: -
-// Z: -
+// Z: set debug level
 //
 //-----------------------------------------------------------------------------
 
@@ -102,31 +103,36 @@ AD9833 AD( AD_FSYNC );
 // globals used in SigGen
 //-----------------------------------------------------------------------------
 
-const float dBfullScale[ 3 ] = { 13.5f, 8.7f, 6.5f }; // full scale for dBm, dBu, dBV
+const char *dBstrings[] = { "dBm", "dBu", "dBV" };
 
-// 100% -> 6.5 dBV at open output, the values below give some kind of logarithic steps
+const float dBfullScale[ 3 ] = { 7.0f, 3.0f, 1.1f }; // dBm (@50Ω), dBu (unloaded), dBV (unloaded)
+
 static const uint8_t gainToPot[ 3 ][ 16 ] = { {
         // dBm 0: 1/256, 255: 256/256
-        0, 1, 2, 3, 5, 8, 11, 16, // dBm: -36, -30, -26, -23, -20, -16, -13, -10,
-        26, 37, 53, 75, 107, 169, 241, 255, // dBm:  -6,  -3,   0,   3,   6,  10,  13,  14
+        0, 1, 2, 3, 4, 7, 10, 16,           // dBm: -42, -36, -32, -29, -27, -23, -20, -16,
+        23, 33, 54, 79, 113, 163, 218, 255, // dBm: -13, -10,  -6,  -3,   0,   3,   6,   7
     },
     {
         // dBu 0: 1/256, 255: 256/256
-        0, 1, 2, 4, 5, 6, 9, 14,           // dBu: -40, -34, -30, -26, -24, -23, -20, -16,
-        20, 29, 46, 66, 94, 134, 187, 255, // dBu: -13, -10,  -6,  -3,   0,   3,   6,   9
+        0, 1, 2, 3, 5, 8, 12, 18,           // dBu: -45, -40, -36, -33, -30, -26, -23, -20,
+        24, 38, 54, 86, 123, 174, 246, 255, // dBu: -17, -13, -10,  -6,  -3,   0,   3, 3FS
     },
     {
         // dBV 0: 1/256, 255: 256/256
-        0, 1, 2, 3, 5, 8, 11, 17, // dBV: -42, -36, -32, -30, -26, -22, -20, -17,
-        24, 37, 60, 85, 120, 170, 242, 255, // dBV: -14, -10,  -6,  -3,   0,   3,   6,   7
+        0, 1, 2, 3, 4, 6, 10, 15,           // dBV: -47, -41, -38, -35, -33, -30, -26, -23,
+        22, 35, 50, 70, 112, 159, 225, 255, // dBV: -20, -16, -13, -10,  -6,  -3,   0,   1
     }
 };
+
+// the digital pot has gain degradation above 1 MHz - see data sheet DS11195C-page 9
+// dB correction values for f > 1 MHz and full scale gain
+const int8_t dBcorrMHz[] = {0, 0, 0, -1, -2, -3, -4, -5, -6, -7}; //0.x, 1.x, 2.x ... 9.x MHz
 
 const uint8_t digits = 7; // number of digits ( nOD ) in the number arrays
 // three number arrays: data input, start and stop frequency
 uint8_t dataInput[ digits ] = { 0, 0, 0, 0, 0, 0, 0 }; // data input accumulator
-uint8_t freqStart[ digits ] = { 0, 0, 0, 0, 0, 0, 0 }; // 1000Hz, cursor pos = 0..digits-1
-uint8_t freqStop[ digits ] = { 0, 0, 2, 0, 0, 0, 0 };  // 20kHz,  cursor pos = digits..2*digits-1
+uint8_t freqStart[ digits ] = { 0, 0, 0, 0, 0, 0, 0 }; // 0Hz, cursor pos = 0..digits-1
+uint8_t freqStop[ digits ] =  { 0, 0, 0, 0, 0, 0, 0 }; // 0Hz, cursor pos = digits..2*digits-1
 const uint8_t waveformPos = 2 * digits;                // cursor position for these items
 const uint8_t sweepPos = 2 * digits + 1;
 const uint8_t gainPos = 2 * digits + 2;
@@ -144,6 +150,7 @@ int8_t dB = 0;
 enum dB_t { dBm = 0, dBu, dBV };
 dB_t dBtype = dBm; //
 
+uint8_t debug = 0;
 
 // button inputs
 const int btnLeft = 8;  // pushbutton
@@ -258,8 +265,6 @@ const uint8_t imgUpDown[] PROGMEM = {
     0x10, 0x18, 0xFC, 0xFE, 0xFC, 0x18, 0x10, 0x10, 0x30, 0x7F, 0xFF, 0x7F, 0x30, 0x10,
 };
 
-const char *dBstrings[] = { "dBm", "dBu", "dBV" };
-
 //-----------------------------------------------------------------------------
 // showMenu
 // draw a box and show complete generator status
@@ -306,7 +311,8 @@ void showMenu( void ) {
     // show dB amplitude below gain bar
     page = 6;
     col = 2;
-    col += OLED.drawInt( dB, col, page, OLED.smallFont );
+    int8_t dBcorr = dBcorrMHz[ *freqStart ];
+    col += OLED.drawInt( dB + dBcorr, col, page, OLED.smallFont );
 
     OLED.drawString( dBstrings[ dBtype ], col, page, OLED.smallFont );
     if ( cursor == waveformPos )
@@ -522,13 +528,11 @@ bool parseSerial( void ) {
                 case '?':
                     showStatus();
                     break;
-                case 'A': { // digital pot setting 0..256!
+                case 'A': { // digital pot setting 0..255, < 0 switches off
                         int16_t a = int16_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
                         minus = false;
-                        if ( a < 0 )
-                            a = 0;
-                        else if ( a > 256 )
-                            a = 256;
+                        if ( a > 255 )
+                            a = 255;
                         setLinGain( a );
                         popFreq();
                         showMenu();
@@ -549,7 +553,7 @@ bool parseSerial( void ) {
                     }
                 case 'C':
                     break;
-                case 'D': // set dB gain, value = -40..+7 dBV, smaller values = off
+                case 'D': // set dB gain, value = -50..+10 dBm, smaller values = off
                     setdBGain( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
                     minus = false;
                     popFreq();
@@ -618,6 +622,9 @@ bool parseSerial( void ) {
                 case 'Y':
                     break;
                 case 'Z':
+                    debug = calcNumber( dataInput );
+                    minus = false;
+                    popFreq();
                     break;
                 default:
                     return false;
@@ -835,12 +842,20 @@ void setPot( uint8_t value ) {
 
 void setGain() {
     if ( gain ) {
+        if ( gain > 16 )
+            gain = 16;
         int value = gainToPot[ dBtype ][ gain - 1 ];
         setPot( value );
         dB = dBfromValue( value );
-        // Serial.println( gain );
-        // Serial.println( dB );
-        // Serial.println( value );
+        if ( debug ) {
+            Serial.print( F( "setGain() gain: " ) );
+            Serial.print( gain );
+            Serial.print( F( ", " ) );
+            Serial.print( dB );
+            Serial.print( dBstrings[ dBtype ] );
+            Serial.print( F( ", value: " ) );
+            Serial.println( value );
+        }
     } else {
         MCP.shutdown();
         dB = -60;
@@ -848,8 +863,8 @@ void setGain() {
 }
 
 
-void setLinGain( int value ) { // 0..256
-    if ( --value < 0 ) {
+void setLinGain( int value ) { // 0..255, value < 0 switches off
+    if ( value < 0 ) {
         MCP.shutdown();
         gain = 0;
         dB = -60;
@@ -863,15 +878,21 @@ void setLinGain( int value ) { // 0..256
         ++gain;
         dB = dBfromValue( value );
     }
-    // Serial.println( gain );
-    // Serial.println( dB );
-    // Serial.println( value );
+    if ( debug ) {
+        Serial.print( F( "setLinGain() gain: " ) );
+        Serial.print( gain );
+        Serial.print( F( ", " ) );
+        Serial.print( dB );
+        Serial.print( dBstrings[ dBtype ] );
+        Serial.print( F( ", value: " ) );
+        Serial.println( value );
+    }
 }
 
 
 void setdBGain( int value ) {
-    value = int( 256 * pow( 10.0, ( value - dBfullScale[ dBtype ] ) / 20.0 ) + 0.5 );
-    setLinGain( value );
+    value = int( round( 256 * pow( 10.0, ( value - dBfullScale[ dBtype ] ) / 20.0 ) ) );
+    setLinGain( value -1 );
 }
 
 
@@ -946,15 +967,19 @@ void initSigGen( void ) {
     if ( LOW == digitalRead( btnLeft ) ) {
         cursor = 0; // 10⁶ pos;
         freqStart [ cursor ] = 1; // set 1MHz
+        freqStop [ cursor ] = 9;  // set 9MHz
     } else if ( LOW == digitalRead( btnRight ) ) {
         cursor = 1; // 10⁵ digit
-        freqStart[ cursor ] = 1; // set 100 kHz       
+        freqStart[ cursor ] = 1;   // set 100 kHz       
+        freqStop [ cursor-1 ] = 1; // set 1MHz
     } else if ( LOW == digitalRead( btnDown ) ) {
         cursor = 2; // 10⁴ digit
-        freqStart[ cursor ] = 1; // set 10 kHz       
+        freqStart[ cursor ] = 1;   // set 10 kHz       
+        freqStop [ cursor-1 ] = 1; // set 100kHz
     } else if ( LOW == digitalRead( btnUp ) ) {
         cursor = 3; // 10³ digit
-        freqStart[ cursor ] = 1; // set 1 kHz       
+        freqStart[ cursor ] = 1;   // set 1 kHz       
+        freqStop [ cursor-1 ] = 2; // set 20kHz
     }
     popFreq(); // move into data input
 
