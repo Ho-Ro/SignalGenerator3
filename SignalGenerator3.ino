@@ -11,6 +11,7 @@
 //   subject to the GNU General Public License
 //
 // Changelog:
+// 20221130:    allow .5M or 77k5 numeric format
 // 20221126:    correct the dB display for f > 1MHz (valid for full gain output)
 // 20221124:    provide dBV, dBu, dBm display, change with btn down when at -60dB
 // 20210329:    round freq -> register value conversion
@@ -22,37 +23,42 @@
 // 20200927:    sync HW buttons and USB UI
 // 20200926:    1st version
 //
-// USB serial interface:
-// [:num:]?[:cmd:]
-// num = [-]?[0-9]{1,7}[kM]? e.g. '123' or '-10' or '150k' or '1M'
-// cmd:
-// ?: show status
-// A: digital pot linear setting, num = 0..255, <0 = 0ff
-// B: digital pot log setting, num = 1..16, 0: off
-// C: -
-// D: set dB gain, num = -50..+10, smaller values = off
-// E: echo on/off
-// F: constant freq1
-// G: sweep 1s from freq1 to freq2
-// H: sweep 3s from freq1 to freq2
-// I: sweep 10s from freq1 to freq2
-// J: sweep 30s from freq1 to freq2
-// K: n/a (kilo)
-// L: -
-// M: n/a (Mega)
-// N: -
-// O: output off
-// P: -
-// Q: -
-// R: output rectangle
-// S: output sine
-// T: output triangle
-// U: select dBu
-// V: select dBV
-// W: select dBm
-// X: exchange freq1 and freq2
-// Y: -
-// Z: set debug level
+
+
+const char versionText[] PROGMEM = "Signal Generator 3 - " __DATE__ " " __TIME__; // compilation date
+
+const char helpText[] PROGMEM = "USB serial interface:\n"
+                                " [:num:]?[:cmd:]\n"
+                                " num = [-]?[0-9]{1,7}[kM]? e.g. '123' or '-10' or '150k' or '1M'\n"
+                                " also possible: .5M or 77k5\n"
+                                " cmd:\n"
+                                " ?: show status\n"
+                                " A: digital pot linear setting, num = 0..255, <0 = 0ff\n"
+                                " B: digital pot log setting, num = 1..16, 0: off\n"
+                                " C: -\n"
+                                " D: set dB gain, num = -50..+10, smaller values = off\n"
+                                " E: echo on/off\n"
+                                " F: constant freq1\n"
+                                " G: sweep 1s from freq1 to freq2\n"
+                                " H: sweep 3s from freq1 to freq2\n"
+                                " I: sweep 10s from freq1 to freq2\n"
+                                " J: sweep 30s from freq1 to freq2\n"
+                                " K: n/a (kilo)\n"
+                                " L: -\n"
+                                " M: n/a (Mega)\n"
+                                " N: -\n"
+                                " O: output off\n"
+                                " P: -\n"
+                                " Q: -\n"
+                                " R: output rectangle\n"
+                                " S: output sine\n"
+                                " T: output triangle\n"
+                                " U: select dBu\n"
+                                " V: select dBV\n"
+                                " W: select dBm\n"
+                                " X: exchange freq1 and freq2\n"
+                                " Y: -\n"
+                                " Z: set debug level";
 //
 //-----------------------------------------------------------------------------
 
@@ -107,7 +113,8 @@ const char *dBstrings[] = { "dBm", "dBu", "dBV" };
 
 const float dBfullScale[ 3 ] = { 7.0f, 3.0f, 1.1f }; // dBm (@50Ω), dBu (unloaded), dBV (unloaded)
 
-static const uint8_t gainToPot[ 3 ][ 16 ] = { {
+static const uint8_t gainToPot[ 3 ][ 16 ] = {
+    {
         // dBm 0: 1/256, 255: 256/256
         0, 1, 2, 3, 4, 7, 10, 16,           // dBm: -42, -36, -32, -29, -27, -23, -20, -16,
         23, 33, 54, 79, 113, 163, 218, 255, // dBm: -13, -10,  -6,  -3,   0,   3,   6,   7
@@ -121,22 +128,22 @@ static const uint8_t gainToPot[ 3 ][ 16 ] = { {
         // dBV 0: 1/256, 255: 256/256
         0, 1, 2, 3, 4, 6, 10, 15,           // dBV: -47, -41, -38, -35, -33, -30, -26, -23,
         22, 35, 50, 70, 112, 159, 225, 255, // dBV: -20, -16, -13, -10,  -6,  -3,   0,   1
-    }
+    },
 };
 
 // the digital pot has gain degradation above 1 MHz - see data sheet DS11195C-page 9
 // dB correction values for f > 1 MHz and full scale gain
-const int8_t dBcorrMHz[] = {0, 0, 0, -1, -2, -3, -4, -5, -6, -7}; //0.x, 1.x, 2.x ... 9.x MHz
+const int8_t dBcorrMHz[] = { 0, 0, 0, -1, -2, -3, -4, -5, -6, -7 }; // 0.x, 1.x, 2.x ... 9.x MHz
 
-const uint8_t digits = 7; // number of digits ( nOD ) in the number arrays
+const uint8_t numDigits = 7; // number of digits ( nOD ) in the number arrays
 // three number arrays: data input, start and stop frequency
-uint8_t dataInput[ digits ] = { 0, 0, 0, 0, 0, 0, 0 }; // data input accumulator
-uint8_t freqStart[ digits ] = { 0, 0, 0, 0, 0, 0, 0 }; // 0Hz, cursor pos = 0..digits-1
-uint8_t freqStop[ digits ] =  { 0, 0, 0, 0, 0, 0, 0 }; // 0Hz, cursor pos = digits..2*digits-1
-const uint8_t waveformPos = 2 * digits;                // cursor position for these items
-const uint8_t sweepPos = 2 * digits + 1;
-const uint8_t gainPos = 2 * digits + 2;
-const uint8_t exchgPos = 2 * digits + 3;
+uint8_t dataInput[ numDigits ] = { 0, 0, 0, 0, 0, 0, 0 }; // data input accumulator
+uint8_t freqStart[ numDigits ] = { 0, 0, 0, 0, 0, 0, 0 }; // 0Hz, cursor pos = 0..numDigits-1
+uint8_t freqStop[ numDigits ] = { 0, 0, 0, 0, 0, 0, 0 };  // 0Hz, cursor pos = numDigits..2*numDigits-1
+const uint8_t waveformPos = 2 * numDigits;                // cursor position for these items
+const uint8_t sweepPos = 2 * numDigits + 1;
+const uint8_t gainPos = 2 * numDigits + 2;
+const uint8_t exchgPos = 2 * numDigits + 3;
 
 uint8_t cursor = 0; // point to MSB position of freqStart
 
@@ -174,7 +181,7 @@ void setup( void ) {
     // Activate interrupts
     sei();
 
-    Serial.println( F( "Signal Generator 3 - " __DATE__ " " __TIME__ ) ); // compilation date
+    Serial.println( (__FlashStringHelper *)versionText );
 
     initTimer1( 250 ); // init timer1 for sweep timing
     initTimer2();      // init timer2 output for neg. voltage charge pump
@@ -188,9 +195,7 @@ void setup( void ) {
 // Main routines
 // loop
 //-----------------------------------------------------------------------------
-void loop( void ) {
-    execMenu();
-}
+void loop( void ) { execMenu(); }
 
 
 //-----------------------------------------------------------------------------
@@ -223,12 +228,13 @@ const uint8_t imgTria[] PROGMEM = {
 };
 
 // one period of sine
-const uint8_t imgSine[] PROGMEM = { 14, // width
-                                    2,  // pages
-                                    28, // 28 bars
-                                    0xE0, 0x1C, 0x02, 0x01, 0x01, 0x02, 0x1C, 0xE0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81, 0x8E, 0x90, 0xA0, 0xA0, 0x90, 0x8F
-                                  };
+const uint8_t imgSine[] PROGMEM = {
+    14, // width
+    2,  // pages
+    28, // 28 bars
+    0xE0, 0x1C, 0x02, 0x01, 0x01, 0x02, 0x1C, 0xE0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81, 0x8E, 0x90, 0xA0, 0xA0, 0x90, 0x8F,
+};
 
 // one period of rectangle
 const uint8_t imgRect[] PROGMEM = {
@@ -279,7 +285,7 @@ void showMenu( void ) {
     if ( sweep == swOff ) { // one large frequency display
         page = 2;
         col = 20;
-        for ( i = 0; i < digits; ++i ) {
+        for ( i = 0; i < numDigits; ++i ) {
             if ( i == cursor )
                 OLED.drawImage( col + 2, page + 2, imgCurUp );
             col += OLED.drawInt( freqStart[ i ], col, page, OLED.largeDigitsFont );
@@ -290,7 +296,7 @@ void showMenu( void ) {
         page = 2;
         col = 70;
         OLED.drawString( F( "Start Freq: " ), 24, page, OLED.smallFont );
-        for ( i = 0; i < digits; ++i ) {
+        for ( i = 0; i < numDigits; ++i ) {
             if ( i == cursor )
                 OLED.drawImage( col - 2, page + 1, imgCurUp );
             col += OLED.drawInt( freqStart[ i ], col, page, OLED.smallFont );
@@ -300,8 +306,8 @@ void showMenu( void ) {
         page = 4;
         col = 70;
         OLED.drawString( F( "Stop Freq: " ), 24, page, OLED.smallFont );
-        for ( i = 0; i < digits; ++i ) {
-            if ( i == cursor - digits )
+        for ( i = 0; i < numDigits; ++i ) {
+            if ( i == cursor - numDigits )
                 OLED.drawImage( col - 2, page + 1, imgCurUp );
             col += OLED.drawInt( freqStop[ i ], col, page, OLED.smallFont );
         }
@@ -322,40 +328,40 @@ void showMenu( void ) {
     const uint8_t startcol = 36;
     for ( col = startcol; col < ( startcol + 2 * 14 ); col += 14 )
         switch ( waveType ) {
-            case AD9833::wReset:
-                if ( startcol == col )
-                    OLED.drawString( F( "OFF" ), col, page, OLED.smallFont );
-                break;
-            case AD9833::wSine:
-                OLED.drawImage( col, page, imgSine );
-                break;
-            case AD9833::wTriangle:
-                OLED.drawImage( col, page, imgTria );
-                break;
-            case AD9833::wRectangle:
-                OLED.drawImage( col, page, imgRect );
-                break;
+        case AD9833::wReset:
+            if ( startcol == col )
+                OLED.drawString( F( "OFF" ), col, page, OLED.smallFont );
+            break;
+        case AD9833::wSine:
+            OLED.drawImage( col, page, imgSine );
+            break;
+        case AD9833::wTriangle:
+            OLED.drawImage( col, page, imgTria );
+            break;
+        case AD9833::wRectangle:
+            OLED.drawImage( col, page, imgRect );
+            break;
         }
 
     // display sweep time
     page = 6;
     col = 70;
     switch ( sweep ) {
-        case swOff:
-            OLED.drawString( F( "Constant" ), col, page, OLED.smallFont );
-            break;
-        case sw1Sec:
-            OLED.drawString( F( "Sweep 1 s" ), col, page, OLED.smallFont );
-            break;
-        case sw3Sec:
-            OLED.drawString( F( "Sweep 3 s" ), col, page, OLED.smallFont );
-            break;
-        case sw10Sec:
-            OLED.drawString( F( "Sweep 10 s" ), col, page, OLED.smallFont );
-            break;
-        case sw30Sec:
-            OLED.drawString( F( "Sweep 30 s" ), col, page, OLED.smallFont );
-            break;
+    case swOff:
+        OLED.drawString( F( "Constant" ), col, page, OLED.smallFont );
+        break;
+    case sw1Sec:
+        OLED.drawString( F( "Sweep 1 s" ), col, page, OLED.smallFont );
+        break;
+    case sw3Sec:
+        OLED.drawString( F( "Sweep 3 s" ), col, page, OLED.smallFont );
+        break;
+    case sw10Sec:
+        OLED.drawString( F( "Sweep 10 s" ), col, page, OLED.smallFont );
+        break;
+    case sw30Sec:
+        OLED.drawString( F( "Sweep 30 s" ), col, page, OLED.smallFont );
+        break;
     }
 
     if ( cursor == sweepPos )
@@ -459,20 +465,20 @@ void execMenu( void ) {
             }
         } else {
             switch ( sweep ) {
-                case sw1Sec:
-                    sweepSteps = 1000L;
-                    break;
-                case sw3Sec:
-                    sweepSteps = 3000L;
-                    break;
-                case sw10Sec:
-                    sweepSteps = 10000L;
-                    break;
-                case sw30Sec:
-                    sweepSteps = 30000L;
-                    break;
-                default:
-                    break;
+            case sw1Sec:
+                sweepSteps = 1000L;
+                break;
+            case sw3Sec:
+                sweepSteps = 3000L;
+                break;
+            case sw10Sec:
+                sweepSteps = 10000L;
+                break;
+            case sw30Sec:
+                sweepSteps = 30000L;
+                break;
+            default:
+                break;
             }
             stepSweep( true ); // advance the frequency one step (true: up, false: down)
         }
@@ -485,149 +491,181 @@ void execMenu( void ) {
 // parseSerial
 //   if a uint8_t is available in the serial input buffer
 //   collect numbers or execute it as a command
+//   number up to 7 digits, format can be:
+//     123 or 10k or 1.5M or 77k5 or .05M
 //-----------------------------------------------------------------------------
 bool parseSerial( void ) {
     static bool echo = false;
-    static bool numeric = false;     // input of argument
-    static bool kiloMegaMod = false; // true if char 'k' or 'M' was input
+    static bool numeric = false; // input of argument
+    static int8_t digits = 0;    // number of entered digits
+    static int8_t decimal = 0;   // number of decimal digits
+    static int8_t kiloMega = 0;  // number of shifts if 'k' or 'M' was input
     static bool minus = false;
     bool newFrequency = false;
     if ( Serial.available() > 0 ) {
         char c = Serial.read();
         if ( echo )
             Serial.write( c );
-        if ( ( c >= '0' ) && ( c <= '9' ) ) {
-            for ( int i = 0; i < digits - 1; ++i )
+        if ( c == '-' ) {
+            numeric = true;
+            minus = true;
+        } else if ( c == '.' ) {
+            numeric = true;
+            decimal = digits + 1; // position _before_ nth digit to catch input like ".123" -> digits = 3, decimal = 1
+        } else if ( ( c >= '0' ) && ( c <= '9' ) ) {
+            for ( int i = 0; i < numDigits - 1; ++i )
                 dataInput[ i ] = numeric ? dataInput[ i + 1 ] : 0; // clear all or shift left
-            dataInput[ digits - 1 ] = c - '0';                     // add new digit at the right
-            numeric = true;                                        // we are in argument input mode
-            kiloMegaMod = false;
+            dataInput[ numDigits - 1 ] = c - '0';                  // add new digit at the right
+            if ( !numeric ) {
+                kiloMega = 0;
+                digits = 0;
+                decimal = 0;
+            }
+            numeric = true; // we are in argument input mode
+            digits++;
         } else if ( c == 'k' || c == 'K' ) {
-            if ( !kiloMegaMod ) { // apply only once
-                for ( int i = 0; i < digits - 3; ++i ) {
-                    dataInput[ i ] = dataInput[ i + 3 ]; // value << 3 digits
-                    dataInput[ i + 3 ] = 0;              // clear last 3 digits
-                }
-                kiloMegaMod = true;
-                numeric = false;
+            if ( !kiloMega ) {  // apply only once
+                kiloMega = 3;   // shift << 3
+                if ( !decimal ) // e.g. 1k7
+                    decimal = digits + 1;
+                else
+                    numeric = false;
             }
         } else if ( c == 'M' || c == 'm' ) {
-            if ( !kiloMegaMod ) {                // apply only once
-                dataInput[ 0 ] = dataInput[ 6 ]; // value << 6 digits
-                for ( int i = 1; i < digits; ++i ) {
-                    dataInput[ i ] = 0; // clear last 6 digits
-                }
-                kiloMegaMod = true;
-                numeric = false;
+            if ( !kiloMega ) {  // apply only once
+                kiloMega = 6;   // shift << 6
+                if ( !decimal ) // e.g. 1M5 = 1.5M
+                    decimal = digits + 1;
+                else
+                    numeric = false;
             }
-        } else if ( c == '-' ) {
-            minus = true;
-        } else {             // all other non numeric char stop number input
-            numeric = false; // no more digits
+        } else {
+            // all other non numeric char stop number input
+            numeric = false;                           // no more digits
+            if ( digits && ( decimal || kiloMega ) ) { // handle 1.5M or 77k5
+                int8_t shift = kiloMega;
+                if ( decimal )
+                    shift -= digits - decimal + 1;
+                if ( shift < 0 ) {
+                    shift = -shift;
+                    for ( int i = numDigits - 1; i >= 0; --i ) {                  // 6..0
+                        dataInput[ i ] = i >= shift ? dataInput[ i - shift ] : 0; // 0 -> value >>
+                    }
+                } else if ( shift > 0 ) {
+                    for ( int i = 0; i < numDigits; ++i ) {                                      // 0..6
+                        dataInput[ i ] = i > numDigits - 1 - shift ? 0 : dataInput[ i + shift ]; //  << value <- 0
+                    }
+                }
+                digits = 0;
+                decimal = 0;
+                kiloMega = 0;
+            }
             switch ( toupper( c ) ) {
-                case '?':
-                    showStatus();
-                    break;
-                case 'A': { // digital pot setting 0..255, < 0 switches off
-                        int16_t a = int16_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
-                        minus = false;
-                        if ( a > 255 )
-                            a = 255;
-                        setLinGain( a );
-                        popFreq();
-                        showMenu();
-                        break;
-                    }
-                case 'B': { // set internal gain step 0..16 , kind of logarithmic shape
-                        int8_t b = int8_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
-                        minus = false;
-                        if ( b < 0 )
-                            b = 0;
-                        else if ( b > 16 )
-                            b = 16;
-                        gain = b;
-                        setGain();
-                        popFreq();
-                        showMenu();
-                        break;
-                    }
-                case 'C':
-                    break;
-                case 'D': // set dB gain, value = -50..+10 dBm, smaller values = off
-                    setdBGain( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
-                    minus = false;
-                    popFreq();
-                    showMenu();
-                    break;
-                case 'E': // toggle terminal echo
-                    echo = !echo;
-                    break;
-                case 'F': // freq1 (no sweep)
-                    sweep = swOff;
-                    newFrequency = true;
-                    break;
-                case 'G': // sweep from freq1 to freq2 within 1 second
-                    sweep = sw1Sec;
-                    break;
-                case 'H': // sweep 3s
-                    sweep = sw3Sec;
-                    break;
-                case 'I': // sweep 10s
-                    sweep = sw10Sec;
-                    break;
-                case 'J': // sweep 30s
-                    sweep = sw30Sec;
-                    break;
-                case 'L':
-                    break;
-                case 'N':
-                    break;
-                case 'O': // output off
-                    AD.reset();
-                    waveType = AD9833::wReset;
-                    break;
-                case 'P':
-                    break;
-                case 'Q':
-                    break;
-                case 'R': // rectangle output
-                    waveType = AD9833::wRectangle;
-                    newFrequency = true;
-                    break;
-                case 'S': // sine output
-                    waveType = AD9833::wSine;
-                    newFrequency = true;
-                    break;
-                case 'T': // triangle output
-                    waveType = AD9833::wTriangle;
-                    newFrequency = true;
-                    break;
-                case 'U': // set dbu display
-                    dBtype = dBu;
-                    setGain();
-                    break;
-                case 'V': // set dBV display
-                    dBtype = dBV;
-                    setGain();
-                    break;
-                case 'W': // set dBm display
-                    dBtype = dBm;
-                    setGain();
-                    break;
-                case 'X': // exchange freq1 and freq2
-                    exchgFreq();
-                    popFreq();
-                    newFrequency = true;
-                    break;
-                case 'Y':
-                    break;
-                case 'Z':
-                    debug = calcNumber( dataInput );
-                    minus = false;
-                    popFreq();
-                    break;
-                default:
-                    return false;
+            case '?':
+                Serial.println( (__FlashStringHelper *)versionText );
+                Serial.println( (__FlashStringHelper *)helpText );
+                showStatus();
+                break;
+            case 'A': { // digital pot setting 0..255, < 0 switches off
+                int16_t a = int16_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
+                minus = false;
+                if ( a > 255 )
+                    a = 255;
+                setLinGain( a );
+                popFreq();
+                showMenu();
+                break;
+            }
+            case 'B': { // set internal gain step 0..16 , kind of logarithmic shape
+                int8_t b = int8_t( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
+                minus = false;
+                if ( b < 0 )
+                    b = 0;
+                else if ( b > 16 )
+                    b = 16;
+                gain = b;
+                setGain();
+                popFreq();
+                showMenu();
+                break;
+            }
+            case 'C':
+                break;
+            case 'D': // set dB gain, value = -50..+10 dBm, smaller values = off
+                setdBGain( minus ? -calcNumber( dataInput ) : calcNumber( dataInput ) );
+                minus = false;
+                popFreq();
+                showMenu();
+                break;
+            case 'E': // toggle terminal echo
+                echo = !echo;
+                break;
+            case 'F': // freq1 (no sweep)
+                sweep = swOff;
+                newFrequency = true;
+                break;
+            case 'G': // sweep from freq1 to freq2 within 1 second
+                sweep = sw1Sec;
+                break;
+            case 'H': // sweep 3s
+                sweep = sw3Sec;
+                break;
+            case 'I': // sweep 10s
+                sweep = sw10Sec;
+                break;
+            case 'J': // sweep 30s
+                sweep = sw30Sec;
+                break;
+            case 'L':
+                break;
+            case 'N':
+                break;
+            case 'O': // output off
+                AD.reset();
+                waveType = AD9833::wReset;
+                break;
+            case 'P':
+                break;
+            case 'Q':
+                break;
+            case 'R': // rectangle output
+                waveType = AD9833::wRectangle;
+                newFrequency = true;
+                break;
+            case 'S': // sine output
+                waveType = AD9833::wSine;
+                newFrequency = true;
+                break;
+            case 'T': // triangle output
+                waveType = AD9833::wTriangle;
+                newFrequency = true;
+                break;
+            case 'U': // set dbu display
+                dBtype = dBu;
+                setGain();
+                break;
+            case 'V': // set dBV display
+                dBtype = dBV;
+                setGain();
+                break;
+            case 'W': // set dBm display
+                dBtype = dBm;
+                setGain();
+                break;
+            case 'X': // exchange freq1 and freq2
+                exchgFreq();
+                popFreq();
+                newFrequency = true;
+                break;
+            case 'Y':
+                break;
+            case 'Z':
+                debug = calcNumber( dataInput );
+                minus = false;
+                popFreq();
+                break;
+            default:
+                return false;
             }
             if ( newFrequency ) {
                 enterFreq();
@@ -644,18 +682,18 @@ bool parseSerial( void ) {
 void showStatus() {
     Serial.println();
     switch ( waveType ) {
-        case AD9833::wSine:
-            Serial.print( F( "Sine " ) );
-            break;
-        case AD9833::wTriangle:
-            Serial.print( F( "Triangle " ) );
-            break;
-        case AD9833::wRectangle:
-            Serial.print( F( "Rectangle " ) );
-            break;
-        case AD9833::wReset:
-            Serial.print( F( "Off " ) );
-            break;
+    case AD9833::wSine:
+        Serial.print( F( "Sine " ) );
+        break;
+    case AD9833::wTriangle:
+        Serial.print( F( "Triangle " ) );
+        break;
+    case AD9833::wRectangle:
+        Serial.print( F( "Rectangle " ) );
+        break;
+    case AD9833::wReset:
+        Serial.print( F( "Off " ) );
+        break;
     }
     if ( sweep != swOff ) {
         Serial.print( F( "sweep " ) );
@@ -691,7 +729,7 @@ void cursorRight( void ) {
     else
         ++cursor;
     // skip over the stop frequency display if no sweep
-    if ( ( cursor >= digits ) && ( cursor < 2 * digits ) && ( sweep == swOff ) )
+    if ( ( cursor >= numDigits ) && ( cursor < 2 * numDigits ) && ( sweep == swOff ) )
         cursor = waveformPos;
 }
 
@@ -706,8 +744,8 @@ void cursorLeft( void ) {
     else
         --cursor;
     // skip over the stop frequency display if no sweep
-    if ( ( cursor >= digits ) && ( cursor < 2 * digits ) && ( sweep == swOff ) )
-        cursor = digits - 1;
+    if ( ( cursor >= numDigits ) && ( cursor < 2 * numDigits ) && ( sweep == swOff ) )
+        cursor = numDigits - 1;
 }
 
 
@@ -730,29 +768,29 @@ void incItem( void ) {
             sweep = sweep_t( sweep + 1 );
     } else if ( cursor == waveformPos ) {
         switch ( waveType ) {
-            case AD9833::wReset:
-                waveType = AD9833::wSine;
-                break;
-            case AD9833::wSine:
-                waveType = AD9833::wTriangle;
-                break;
-            case AD9833::wTriangle:
-                waveType = AD9833::wRectangle;
-                break;
-            case AD9833::wRectangle:
-                waveType = AD9833::wReset;
-                break;
+        case AD9833::wReset:
+            waveType = AD9833::wSine;
+            break;
+        case AD9833::wSine:
+            waveType = AD9833::wTriangle;
+            break;
+        case AD9833::wTriangle:
+            waveType = AD9833::wRectangle;
+            break;
+        case AD9833::wRectangle:
+            waveType = AD9833::wReset;
+            break;
         }
-    } else if ( cursor < digits ) {
+    } else if ( cursor < numDigits ) {
         if ( freqStart[ cursor ] >= 9 )
             freqStart[ cursor ] = 0;
         else
             freqStart[ cursor ]++;
     } else if ( sweep != swOff ) {
-        if ( freqStop[ cursor - digits ] >= 9 )
-            freqStop[ cursor - digits ] = 0;
+        if ( freqStop[ cursor - numDigits ] >= 9 )
+            freqStop[ cursor - numDigits ] = 0;
         else
-            freqStop[ cursor - digits ]++;
+            freqStop[ cursor - numDigits ]++;
     }
 }
 
@@ -767,15 +805,15 @@ void decItem( void ) {
             --gain;
         } else { // change dB type
             switch ( dBtype ) {
-                case dBm:
-                    dBtype = dBu;
-                    break;
-                case dBu:
-                    dBtype = dBV;
-                    break;
-                case dBV:
-                    dBtype = dBm;
-                    break;
+            case dBm:
+                dBtype = dBu;
+                break;
+            case dBu:
+                dBtype = dBV;
+                break;
+            case dBV:
+                dBtype = dBm;
+                break;
             }
         }
         setGain();
@@ -788,29 +826,29 @@ void decItem( void ) {
             sweep = sweep_t( sweep - 1 );
     } else if ( cursor == waveformPos ) {
         switch ( waveType ) {
-            case AD.wReset:
-                waveType = AD9833::wRectangle;
-                break;
-            case AD.wRectangle:
-                waveType = AD9833::wTriangle;
-                break;
-            case AD.wTriangle:
-                waveType = AD9833::wSine;
-                break;
-            case AD.wSine:
-                waveType = AD9833::wReset;
-                break;
+        case AD.wReset:
+            waveType = AD9833::wRectangle;
+            break;
+        case AD.wRectangle:
+            waveType = AD9833::wTriangle;
+            break;
+        case AD.wTriangle:
+            waveType = AD9833::wSine;
+            break;
+        case AD.wSine:
+            waveType = AD9833::wReset;
+            break;
         }
-    } else if ( cursor < digits ) {
+    } else if ( cursor < numDigits ) {
         if ( freqStart[ cursor ] <= 0 )
             freqStart[ cursor ] = 9;
         else
             freqStart[ cursor ]--;
     } else if ( sweep != swOff ) {
-        if ( freqStop[ cursor - digits ] <= 0 )
-            freqStop[ cursor - digits ] = 9;
+        if ( freqStop[ cursor - numDigits ] <= 0 )
+            freqStop[ cursor - numDigits ] = 9;
         else
-            freqStop[ cursor - digits ]--;
+            freqStop[ cursor - numDigits ]--;
     }
 }
 
@@ -820,7 +858,7 @@ void decItem( void ) {
 //-----------------------------------------------------------------------------
 unsigned long calcNumber( const uint8_t *charArray ) {
     unsigned long number = 0;
-    for ( uint8_t pos = 0; pos < digits; ++pos ) {
+    for ( uint8_t pos = 0; pos < numDigits; ++pos ) {
         number *= 10;
         number += charArray[ pos ];
     }
@@ -828,9 +866,7 @@ unsigned long calcNumber( const uint8_t *charArray ) {
 }
 
 
-int8_t dBfromValue( int value ) {
-    return int8_t( round( 20.0 * log10( ( value + 1 ) / 256.0 ) + dBfullScale[ dBtype ] ) );
-}
+int8_t dBfromValue( int value ) { return int8_t( round( 20.0 * log10( ( value + 1 ) / 256.0 ) + dBfullScale[ dBtype ] ) ); }
 
 
 void setPot( uint8_t value ) {
@@ -892,7 +928,7 @@ void setLinGain( int value ) { // 0..255, value < 0 switches off
 
 void setdBGain( int value ) {
     value = int( round( 256 * pow( 10.0, ( value - dBfullScale[ dBtype ] ) / 20.0 ) ) );
-    setLinGain( value -1 );
+    setLinGain( value - 1 );
 }
 
 
@@ -905,7 +941,7 @@ void stepSweep( bool stepUp ) {
     if ( sweepPosition > sweepSteps )
         sweepPosition = 0;
     long f = exp( ( log( calcNumber( freqStop ) ) - log( calcNumber( freqStart ) ) ) *
-                  ( stepUp ? sweepPosition : sweepSteps - sweepPosition ) / sweepSteps +
+                      ( stepUp ? sweepPosition : sweepSteps - sweepPosition ) / sweepSteps +
                   log( calcNumber( freqStart ) ) ) +
              0.5;
     AD.setFrequency( f, waveType );
@@ -920,7 +956,7 @@ void stepSweep( bool stepUp ) {
 //-----------------------------------------------------------------------------
 void exchgFreq() {
     uint8_t x;
-    for ( uint8_t i = 0; i < digits; i++ ) {
+    for ( uint8_t i = 0; i < numDigits; i++ ) {
         x = freqStart[ i ];
         freqStart[ i ] = freqStop[ i ];
         freqStop[ i ] = x;
@@ -933,7 +969,7 @@ void exchgFreq() {
 //    transfer dataInput into freqStart
 //-----------------------------------------------------------------------------
 void enterFreq() {
-    for ( uint8_t i = 0; i < digits; i++ ) {
+    for ( uint8_t i = 0; i < numDigits; i++ ) {
         freqStart[ i ] = dataInput[ i ];
     }
 }
@@ -944,7 +980,7 @@ void enterFreq() {
 //    transfer freqStart back into dataInput
 //-----------------------------------------------------------------------------
 void popFreq() {
-    for ( uint8_t i = 0; i < digits; i++ ) {
+    for ( uint8_t i = 0; i < numDigits; i++ ) {
         dataInput[ i ] = freqStart[ i ];
     }
 }
@@ -963,23 +999,23 @@ void initSigGen( void ) {
     setdBGain( 0 );
 
     AD.reset();
-    
+
     if ( LOW == digitalRead( btnLeft ) ) {
-        cursor = 0; // 10⁶ pos;
-        freqStart [ cursor ] = 1; // set 1MHz
-        freqStop [ cursor ] = 9;  // set 9MHz
+        cursor = 0;              // 10⁶ pos;
+        freqStart[ cursor ] = 1; // set 1MHz
+        freqStop[ cursor ] = 9;  // set 9MHz
     } else if ( LOW == digitalRead( btnRight ) ) {
-        cursor = 1; // 10⁵ digit
-        freqStart[ cursor ] = 1;   // set 100 kHz       
-        freqStop [ cursor-1 ] = 1; // set 1MHz
+        cursor = 1;                 // 10⁵ digit
+        freqStart[ cursor ] = 1;    // set 100 kHz
+        freqStop[ cursor - 1 ] = 1; // set 1MHz
     } else if ( LOW == digitalRead( btnDown ) ) {
-        cursor = 2; // 10⁴ digit
-        freqStart[ cursor ] = 1;   // set 10 kHz       
-        freqStop [ cursor-1 ] = 1; // set 100kHz
+        cursor = 2;                 // 10⁴ digit
+        freqStart[ cursor ] = 1;    // set 10 kHz
+        freqStop[ cursor - 1 ] = 1; // set 100kHz
     } else if ( LOW == digitalRead( btnUp ) ) {
-        cursor = 3; // 10³ digit
-        freqStart[ cursor ] = 1;   // set 1 kHz       
-        freqStop [ cursor-1 ] = 2; // set 20kHz
+        cursor = 3;                 // 10³ digit
+        freqStart[ cursor ] = 1;    // set 1 kHz
+        freqStop[ cursor - 1 ] = 2; // set 20kHz
     }
     popFreq(); // move into data input
 
